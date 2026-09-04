@@ -30,13 +30,31 @@ export async function POST(req: NextRequest) {
 
     console.log("[escalation-webhook-stub]", JSON.stringify(entry, null, 2));
 
+    // If a real Slack/Discord webhook URL is set, forward the payload
+    const target = process.env.ESCALATION_WEBHOOK_URL;
+    if (target && !target.includes("DEMO")) {
+      try {
+        await fetch(target, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: (payload as { text?: string }).text || JSON.stringify(payload),
+            ...((typeof payload === "object" && payload) || {}),
+          }),
+        });
+      } catch (e) {
+        console.warn("[escalation-webhook] forward failed", e);
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      stubbed: true,
+      stubbed: !target || target.includes("DEMO"),
       id,
       endpoint: STUB_ENDPOINT,
-      message: "Merchant notification stubbed — payload captured for demo.",
+      message: "Merchant notification captured for demo.",
       deliveredAt: entry.receivedAt,
+      approveUrl: (payload as { approveUrl?: string })?.approveUrl,
     });
   } catch (error: any) {
     return NextResponse.json(

@@ -69,10 +69,19 @@ class AuditStore {
   private _aiCostSpent: number = 0;
   private _webhookLog: WebhookEvent[] = [];
   private _policySyncedAt: Date | null = null;
+  private _discountEvents: { at: number; pct: number }[] = [];
 
   // ─── Policy ──────────────────────────────────────────────────────────
   get policy() { return this._policy; }
   get policySyncedAt() { return this._policySyncedAt; }
+  get recentDiscountEvents() {
+    const hourAgo = Date.now() - 60 * 60 * 1000;
+    return this._discountEvents.filter((e) => e.at >= hourAgo);
+  }
+  recordDiscountEvent(pct: number) {
+    this._discountEvents.push({ at: Date.now(), pct });
+    this._discountEvents = this._discountEvents.slice(-40);
+  }
   setPolicy(p: Partial<PolicyConfig>, synced = false) {
     this._policy = { ...this._policy, ...p };
     if (synced) this._policySyncedAt = new Date();
@@ -120,6 +129,10 @@ class AuditStore {
     return this.entries.filter(e => e.status === "pending_approval");
   }
 
+  getEntryById(id: string): AuditEntry | undefined {
+    return this.entries.find(e => e.id === id);
+  }
+
   getCounterfactual(entry: AuditEntry): CounterfactualResult {
     return computeCounterfactuals({
       proposedDiscountPct: entry.aiProposedDiscountPct,
@@ -138,7 +151,8 @@ class AuditStore {
 
     if (entry.status === "auto_approved" || entry.status === "approved_by_human") {
       this._budgetUsed += entry.aiProposedDiscount;
-      this._trustScore = Math.min(100, this._trustScore + 2);
+      this._trustScore = Math.min(100, this._trustScore + 3);
+      this.recordDiscountEvent(entry.aiProposedDiscountPct);
     }
 
     const custKey = "session_customer";
@@ -148,10 +162,13 @@ class AuditStore {
     }
 
     if (entry.status === "escalated" || entry.status === "pending_approval") {
-      this._trustScore = Math.max(0, this._trustScore - 3);
+      this._trustScore = Math.max(0, this._trustScore - 2);
     }
     if (entry.status === "caught_anomaly" || entry.status === "villain_blocked") {
-      this._trustScore = Math.max(0, this._trustScore - 8);
+      this._trustScore = Math.max(0, this._trustScore - 10);
+    }
+    if (entry.status === "api_failure") {
+      this._trustScore = Math.max(0, this._trustScore - 1);
     }
 
     this.notify();
@@ -233,6 +250,7 @@ export function useAuditStore() {
     policySyncedAt: auditStore.policySyncedAt,
     webhookLog: auditStore.webhookLog,
     totalDecisions: auditStore.totalDecisions,
+    recentDiscountEvents: auditStore.recentDiscountEvents,
   };
 }
 
@@ -240,7 +258,7 @@ export function genId() {
   return "dec_" + Math.random().toString(36).substr(2, 9) + "_" + Date.now().toString(36);
 }
 
-/** Fire escalation webhook stub (Slack-style ping). */
+/** Fire escalation webhook stub (Slack-style ping) + mobile approve deep link. */
 export async function fireEscalationWebhook(opts: {
   decisionId: string;
   title: string;
@@ -248,11 +266,14 @@ export async function fireEscalationWebhook(opts: {
   confidence: number;
   discountPct: number;
 }) {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const approveUrl = `${origin}/approve/${opts.decisionId}`;
   const payload = {
     channel: "#merchant-approvals",
     username: "Profit Pilot",
-    text: `⚠️ Escalation needs your approval\n• ${opts.title}\n• ${opts.discountPct}% off\n• Confidence: ${opts.confidence}%\n• Why: ${opts.reason}`,
+    text: `⚠️ Escalation needs your approval\n• ${opts.title}\n• ${opts.discountPct}% off\n• Confidence: ${opts.confidence}%\n• Why: ${opts.reason}\n• Approve on phone: ${approveUrl}`,
     decisionId: opts.decisionId,
+    approveUrl,
     ts: new Date().toISOString(),
   };
 

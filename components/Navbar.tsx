@@ -1,22 +1,23 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BRANDS, getBrandId, setBrandId, getBrand, type StoreBrand } from "@/lib/brand";
 
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);
+  const [brand, setBrand] = useState<StoreBrand>(BRANDS[0]);
 
   useEffect(() => {
-    const handleScroll = () => {
-      // If we've scrolled past 100px or the hero height, change state.
-      // 100vh might be a good breakpoint, let's say after 50px so it's sticky immediately when leaving top.
-      setScrolled(window.scrollY > 50);
-    };
-
+    setBrand(getBrand());
+    const onBrand = () => setBrand(getBrand());
+    window.addEventListener("sweetdrip-brand", onBrand);
+    const handleScroll = () => setScrolled(window.scrollY > 50);
     window.addEventListener("scroll", handleScroll, { passive: true });
-    // check immediately
     handleScroll();
-    
-    return () => window.removeEventListener("scroll", handleScroll);
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("sweetdrip-brand", onBrand);
+    };
   }, []);
 
   return (
@@ -30,10 +31,10 @@ export default function Navbar() {
       <nav className="flex items-center justify-between px-6 md:px-12 py-3 text-white">
         <div className="flex flex-col">
           <span className="font-script text-yellow-300 text-xl md:text-2xl leading-none rotate-[-5deg] w-max">
-            C&amp;A
+            {brand.id === "bean" ? "B&B" : "C&A"}
           </span>
           <span className="font-display text-[9px] md:text-xs font-bold tracking-tight mt-0.5 text-white">
-            Cafe and Creamery&trade;
+            {brand.name}
           </span>
         </div>
 
@@ -42,27 +43,35 @@ export default function Navbar() {
             Home
             <span className="w-4 h-[2px] bg-yellow-300 mt-1 absolute -bottom-2" />
           </a>
-          <a href="#about" className="opacity-90 hover:opacity-100">About Us</a>
           <a href="#menu" className="opacity-90 hover:opacity-100">Menu</a>
+          <a href="#about" className="opacity-90 hover:opacity-100">About</a>
           <a href="#gallery" className="opacity-90 hover:opacity-100">Gallery</a>
-          <a href="#catering" className="opacity-90 hover:opacity-100">Catering</a>
-          <a href="#location" className="opacity-90 hover:opacity-100">Location</a>
-          <a href="#faq" className="opacity-90 hover:opacity-100">FAQ</a>
-          <a href="#contact" className="opacity-90 hover:opacity-100">Contact us</a>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          <label className="hidden sm:flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/70">
+            Store
+            <select
+              value={brand.id}
+              onChange={(e) => {
+                setBrandId(e.target.value);
+                setBrand(getBrand());
+              }}
+              className="rounded-full border border-white/30 bg-black/20 px-2 py-1 text-[10px] font-bold text-white outline-none"
+            >
+              {BRANDS.map((b) => (
+                <option key={b.id} value={b.id} className="text-brown">
+                  {b.name} ({b.currency})
+                </option>
+              ))}
+            </select>
+          </label>
           <a
             href="#menu"
             className="hidden md:inline-block border-2 border-white/80 text-white text-sm font-bold px-6 py-2 rounded-full hover:bg-white hover:text-[#DA758C] transition-all duration-300 shadow-sm"
           >
             Order Now
           </a>
-          <button className="lg:hidden flex flex-col gap-1.5 p-1" aria-label="Open menu">
-            <span className="w-5 h-[2px] bg-white rounded-full" />
-            <span className="w-5 h-[2px] bg-white rounded-full" />
-            <span className="w-5 h-[2px] bg-white rounded-full" />
-          </button>
         </div>
       </nav>
     </header>

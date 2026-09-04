@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
     }
 
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.6-flash",
       generationConfig: {
         responseMimeType: "application/json",
         temperature: 0.9,
@@ -136,6 +136,12 @@ Be honest about confidence — do not always return high confidence.`;
         ? Math.round(Number(parsed.discountedPrice) * 100) / 100
         : Math.round(originalPrice * (1 - pct / 100) * 100) / 100;
 
+    let confidence = Number(parsed.confidence);
+    if (!Number.isFinite(confidence)) confidence = 70;
+    // Models sometimes return 0–1 instead of 0–100
+    if (confidence > 0 && confidence <= 1) confidence = Math.round(confidence * 100);
+    confidence = Math.min(98, Math.max(20, Math.round(confidence)));
+
     return NextResponse.json({
       success: true,
       decision: {
@@ -146,7 +152,7 @@ Be honest about confidence — do not always return high confidence.`;
         aiReasoning: String(parsed.aiReasoning || "Complementary upsell for this cart."),
         cfoCast: String(parsed.cfoCast || ""),
         riskScore: Math.min(95, Math.max(5, Number(parsed.riskScore) || 40)),
-        confidence: Math.min(98, Math.max(20, Number(parsed.confidence) || 70)),
+        confidence,
         aiCostInr,
       },
       usage: {

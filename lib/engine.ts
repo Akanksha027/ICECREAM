@@ -179,6 +179,47 @@ export function runConfidenceCheck(
   };
 }
 
+/** Velocity / fraud: too many steep discounts for one customer in a short window. */
+export interface VelocityCheckResult {
+  blocked: boolean;
+  escalate: boolean;
+  reason: string;
+}
+
+export function runVelocityCheck(
+  recentDiscountEvents: { at: number; pct: number }[],
+  proposedDiscountPct: number,
+  opts: { windowMs?: number; maxSteepOffers?: number; steepPct?: number } = {}
+): VelocityCheckResult {
+  const windowMs = opts.windowMs ?? 60 * 60 * 1000;
+  const maxSteep = opts.maxSteepOffers ?? 4;
+  const steepPct = opts.steepPct ?? 15;
+  const now = Date.now();
+  const recent = recentDiscountEvents.filter((e) => now - e.at < windowMs);
+  const steepCount = recent.filter((e) => e.pct >= steepPct).length;
+
+  if (proposedDiscountPct >= steepPct && steepCount >= maxSteep) {
+    return {
+      blocked: true,
+      escalate: false,
+      reason: `VELOCITY BLOCK: ${steepCount} discounts ≥${steepPct}% in the last hour for this customer. Suspected abuse / promo farming — blocked before Razorpay.`,
+    };
+  }
+  if (proposedDiscountPct >= steepPct && steepCount >= maxSteep - 1) {
+    return {
+      blocked: false,
+      escalate: true,
+      reason: `Velocity warning: ${steepCount + 1} steep discounts (≥${steepPct}%) within 1 hour. Escalating for merchant review.`,
+    };
+  }
+  return {
+    blocked: false,
+    escalate: false,
+    reason: "Velocity OK — no unusual discount burst for this session.",
+  };
+}
+
+
 // ─── Counterfactuals (what a naive system would have done) ───────────────────
 
 export interface CounterfactualLane {

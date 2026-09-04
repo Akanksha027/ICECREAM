@@ -2,9 +2,10 @@
 
 import { useState, MouseEvent, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { runSanityCheck, runPolicyCheck, runConfidenceCheck } from "@/lib/engine";
+import { runSanityCheck, runPolicyCheck, runConfidenceCheck, runVelocityCheck } from "@/lib/engine";
 import { auditStore, useAuditStore, genId, fireEscalationWebhook, type DecisionStatus } from "@/lib/auditStore";
 import { useDemoMode } from "@/hooks/useDemoMode";
+import { openRazorpayCheckout } from "@/lib/razorpayClient";
 
 // ─── Menu Items ──────────────────────────────────────────────────────────────
 
@@ -86,8 +87,10 @@ type FlowState =
   | "anomaly_caught"
   | "villain_blocked"
   | "processing_razorpay"
+  | "awaiting_payment"
   | "api_failure"
-  | "success";
+  | "success"
+  | "post_upsell";
 
 interface AIDecision {
   upsellItemName: string;
@@ -119,6 +122,10 @@ function CheckoutFlow({
   const [razorpayId, setRazorpayId] = useState<string>("");
   const [failureMsg, setFailureMsg] = useState<string>("");
   const [pendingEntryId, setPendingEntryId] = useState<string>("");
+  const [paymentId, setPaymentId] = useState("");
+  const [lastReceipt, setLastReceipt] = useState("");
+  const [lastAccepted, setLastAccepted] = useState(false);
+  const [idempotentReplay, setIdempotentReplay] = useState(false);
   const store = useAuditStore();
 
   const totalAmount = cart.reduce((sum, item) => sum + item.price, 0);
@@ -131,6 +138,10 @@ function CheckoutFlow({
     setRazorpayId("");
     setFailureMsg("");
     setPendingEntryId("");
+    setPaymentId("");
+    setLastReceipt("");
+    setLastAccepted(false);
+    setIdempotentReplay(false);
   }, []);
 
   // ── Step 1: Call AI ──
@@ -304,14 +315,39 @@ function CheckoutFlow({
 
     // Confidence check — independent axis: escalate even if policy would pass
     const confidenceResult = runConfidenceCheck(confidence, policy.confidenceThreshold);
-    const shouldEscalate = policyResult.escalate || confidenceResult.escalate;
+
+    // Velocity / fraud burst check
+    const velocity = runVelocityCheck(
+      auditStore.recentDiscountEvents,
+      decision.proposedDiscountPct
+    );
+    if (velocity.blocked) {
+      setRuleVerdict(velocity.reason);
+      setState("anomaly_caught");
+      auditStore.addEntry({
+        id: genId(),
+        ...baseEntry,
+        sanityResult: sanity.reason,
+        policyResult: velocity.reason,
+        confidenceResult: confidenceResult.reason,
+        ruleCheckerVerdict: "blocked",
+        whichRuleTriggered: "Velocity / fraud rule",
+        status: "caught_anomaly",
+        isAnomaly: true,
+      });
+      return;
+    }
+
+    const shouldEscalate = policyResult.escalate || confidenceResult.escalate || velocity.escalate;
 
     if (shouldEscalate) {
-      const why = policyResult.escalate && confidenceResult.escalate
-        ? `${policyResult.reason} ALSO: ${confidenceResult.reason}`
-        : policyResult.escalate
-        ? policyResult.reason
-        : confidenceResult.reason;
+      const why = [
+        policyResult.escalate ? policyResult.reason : "",
+        confidenceResult.escalate ? confidenceResult.reason : "",
+        velocity.escalate ? velocity.reason : "",
+      ]
+        .filter(Boolean)
+        .join(" ALSO: ");
 
       setRuleVerdict(why);
       setState("escalated");
@@ -348,13 +384,23 @@ function CheckoutFlow({
     setState("offer");
   };
 
-  // ── Step 3: Process Razorpay order ──
-  const processRazorpayOrder = async (accepted: boolean) => {
+  // ── Step 3: Create Razorpay order (idempotent) + open Checkout.js ──
+  const processRazorpayOrder = async (accepted: boolean, opts?: { retry?: boolean }) => {
     const decision = aiDecision!;
     setState("processing_razorpay");
+    setLastAccepted(accepted);
 
     const discountInr = Math.round(decision.proposedDiscountPct * decision.originalPrice * 83 / 100);
-    const orderAmountPaise = Math.round(totalAmount * 83 * 100); // USD → INR → paise
+    const payAmount = accepted
+      ? totalAmount + decision.discountedPrice
+      : totalAmount;
+    const orderAmountPaise = Math.round(payAmount * 83 * 100);
+
+    const receipt =
+      opts?.retry && lastReceipt
+        ? lastReceipt
+        : `sd_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`.slice(0, 40);
+    setLastReceipt(receipt);
 
     try {
       const res = await fetch("/api/razorpay/order", {
@@ -362,11 +408,13 @@ function CheckoutFlow({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           amount: orderAmountPaise,
-          simulateFailure: checkoutMode === "simulate_outage",
+          simulateFailure: !opts?.retry && checkoutMode === "simulate_outage",
+          receipt,
+          idempotent: true,
           notes: {
             cart_items: cart.map(c => c.name).join(", "),
             upsell: accepted ? decision.upsellItemName : "none",
-            discount_pct: decision.proposedDiscountPct,
+            discount_pct: String(decision.proposedDiscountPct),
           },
         }),
       });
@@ -374,7 +422,6 @@ function CheckoutFlow({
       const data = await res.json();
 
       if (!data.success) {
-        // ── API FAILURE ──
         setFailureMsg(data.error || "Razorpay API unreachable");
         setState("api_failure");
 
@@ -405,27 +452,60 @@ function CheckoutFlow({
         return;
       }
 
-      // ── SUCCESS ──
       setRazorpayId(data.id);
-      setState("success");
+      setIdempotentReplay(Boolean(data.idempotentReplay));
+      setState("awaiting_payment");
+
+      const key =
+        data.keyId ||
+        process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID ||
+        "";
+
+      const pay = await openRazorpayCheckout({
+        key,
+        orderId: data.id,
+        amountPaise: orderAmountPaise,
+        description: accepted
+          ? `Order + ${decision.upsellItemName}`
+          : "SweetDrip order",
+        notes: {
+          upsell: accepted ? decision.upsellItemName : "none",
+        },
+      });
+
+      if (!pay.ok) {
+        setFailureMsg(
+          pay.message ||
+            (pay.reason === "dismissed"
+              ? "Payment window closed — order held, safe to retry (same receipt)."
+              : "Payment failed — safe to retry.")
+        );
+        setState("api_failure");
+        return;
+      }
+
+      setPaymentId(pay.payment.razorpay_payment_id);
 
       if (accepted) {
-        setCart(prev => [
-          ...prev,
-          {
-            ...ITEMS.find(i => i.name === decision.upsellItemName)!,
-            id: Math.random().toString(36).substr(2, 9),
-            price: decision.discountedPrice,
-            priceLabel: `$${decision.discountedPrice.toFixed(2)}`,
-          },
-        ]);
+        const item = ITEMS.find(i => i.name === decision.upsellItemName);
+        if (item) {
+          setCart(prev => [
+            ...prev,
+            {
+              ...item,
+              id: Math.random().toString(36).substr(2, 9),
+              price: decision.discountedPrice,
+              priceLabel: `$${decision.discountedPrice.toFixed(2)}`,
+            },
+          ]);
+        }
       }
 
       auditStore.addEntry({
         id: genId(),
         timestamp: new Date(),
         cartItems: cart.map(c => c.name),
-        cartTotal: totalAmount,
+        cartTotal: payAmount,
         currency: "USD",
         aiProposedDiscountPct: decision.proposedDiscountPct,
         aiProposedDiscount: discountInr,
@@ -443,15 +523,12 @@ function CheckoutFlow({
         whichRuleTriggered: "None — all checks passed",
         status: "auto_approved",
         razorpayOrderId: data.id,
-        razorpayAmount: Math.round(totalAmount * 83),
+        razorpayAmount: Math.round(payAmount * 83),
         isAnomaly: false,
       });
 
-      setTimeout(() => {
-        setCart(() => []);
-        setIsCartOpen(false);
-        resetFlow();
-      }, 4000);
+      // Brief post-payment add-on tease, then success
+      setState("post_upsell");
     } catch (err: any) {
       setFailureMsg(err.message || "Network error");
       setState("api_failure");
@@ -694,14 +771,20 @@ function CheckoutFlow({
     );
   }
 
-  if (state === "processing_razorpay") {
+  if (state === "processing_razorpay" || state === "awaiting_payment") {
     return (
       <div className="w-full rounded-2xl bg-blush/40 py-4 flex flex-col items-center justify-center gap-2 border border-brown/10 text-brown">
         <div className="flex items-center gap-2">
           <svg className="animate-spin h-5 w-5 text-[#DA758C]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-          <span className="text-sm font-medium">{demo ? "Creating Razorpay order..." : "Placing your order…"}</span>
+          <span className="text-sm font-medium">
+            {state === "awaiting_payment"
+              ? (demo ? "Waiting for Razorpay Checkout…" : "Complete payment in the secure window…")
+              : (demo ? "Creating Razorpay order…" : "Placing your order…")}
+          </span>
         </div>
-        {demo && <p className="text-[10px] text-brown/40">Real test-mode API call in progress</p>}
+        {demo && razorpayId && (
+          <p className="text-[10px] font-mono text-brown/40">Order {razorpayId}{idempotentReplay ? " · idempotent replay" : ""}</p>
+        )}
       </div>
     );
   }
@@ -713,20 +796,101 @@ function CheckoutFlow({
           <>
             <div className="flex items-center gap-2">
               <span className="text-gray-500 text-lg">⚡</span>
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-600">Razorpay API Failure — Order Held Safely</span>
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-600">Held safely — retry without double charge</span>
             </div>
             <p className="text-xs text-brown/70">{failureMsg}</p>
-            <p className="text-[10px] text-brown/40">No charge was created. The customer was not billed. Safe to retry.</p>
+            {lastReceipt && (
+              <p className="text-[10px] font-mono text-brown/40">Receipt: {lastReceipt}</p>
+            )}
           </>
         ) : (
           <>
-            <p className="text-sm font-medium text-brown">Something went wrong placing your order.</p>
-            <p className="text-[11px] text-brown/50">You weren&apos;t charged. Please try again in a moment.</p>
+            <p className="text-sm font-medium text-brown">Payment didn&apos;t go through.</p>
+            <p className="text-[11px] text-brown/50">You weren&apos;t charged. Retry uses the same receipt — no double order.</p>
           </>
         )}
-        <button onClick={resetFlow} className="w-full rounded-full bg-brown text-white py-2 text-xs font-bold hover:bg-brown/90 transition-all">
-          {demo ? "Dismiss" : "Try again"}
-        </button>
+        <div className="flex gap-2">
+          <button onClick={resetFlow} className="flex-1 rounded-full border border-brown/20 bg-white py-2 text-xs font-bold text-brown hover:bg-gray-50 transition-all">
+            Cancel
+          </button>
+          <button
+            onClick={() => processRazorpayOrder(lastAccepted, { retry: true })}
+            className="flex-1 rounded-full bg-[#DA758C] text-white py-2 text-xs font-bold hover:bg-[#c9637a] transition-all"
+          >
+            Retry safely
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === "post_upsell" && aiDecision) {
+    const extras = ITEMS.filter(
+      (i) => i.name !== aiDecision.upsellItemName && !cart.some((c) => c.name === i.name)
+    ).slice(0, 2);
+    return (
+      <div className="w-full rounded-2xl bg-white p-4 border border-brown/10 shadow-inner space-y-3">
+        <p className="text-sm font-bold text-green-700">Paid — thank you!</p>
+        {demo && (
+          <p className="text-[10px] font-mono text-blue-600">
+            Payment {paymentId || "…"} · Order {razorpayId}
+          </p>
+        )}
+        {extras.length > 0 && (
+          <>
+            <p className="text-xs font-bold uppercase tracking-wider text-[#DA758C]">One more bite?</p>
+            <p className="text-sm text-brown">
+              Add <span className="font-bold">{extras[0].name}</span> for {extras[0].priceLabel} before we wrap up.
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setState("success");
+                  setTimeout(() => {
+                    setCart(() => []);
+                    setIsCartOpen(false);
+                    resetFlow();
+                  }, 2500);
+                }}
+                className="flex-1 rounded-full border border-brown/20 bg-white py-2 text-xs font-bold text-brown"
+              >
+                No thanks
+              </button>
+              <button
+                onClick={() => {
+                  setCart((prev) => [
+                    ...prev,
+                    { ...extras[0], id: Math.random().toString(36).substr(2, 9) },
+                  ]);
+                  setState("success");
+                  setTimeout(() => {
+                    setCart(() => []);
+                    setIsCartOpen(false);
+                    resetFlow();
+                  }, 2500);
+                }}
+                className="flex-1 rounded-full bg-[#DA758C] text-white py-2 text-xs font-bold"
+              >
+                Add {extras[0].name.split(" ")[0]}
+              </button>
+            </div>
+          </>
+        )}
+        {extras.length === 0 && (
+          <button
+            onClick={() => {
+              setState("success");
+              setTimeout(() => {
+                setCart(() => []);
+                setIsCartOpen(false);
+                resetFlow();
+              }, 2000);
+            }}
+            className="w-full rounded-full bg-[#DA758C] text-white py-2 text-xs font-bold"
+          >
+            Done
+          </button>
+        )}
       </div>
     );
   }
@@ -737,13 +901,14 @@ function CheckoutFlow({
         <div className="flex items-center gap-2">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
           <span className="text-sm font-bold text-green-700">
-            {demo ? "Order Created Successfully!" : "Order placed — thank you!"}
+            {demo ? "Payment captured (test mode)!" : "Order placed — thank you!"}
           </span>
         </div>
         {demo && (
           <>
-            <p className="text-xs font-mono text-blue-600">Razorpay Order: {razorpayId}</p>
-            <p className="text-[10px] text-brown/40">Logged to audit trail. Cart will clear shortly.</p>
+            <p className="text-xs font-mono text-blue-600">Order: {razorpayId}</p>
+            {paymentId && <p className="text-xs font-mono text-blue-600">Payment: {paymentId}</p>}
+            {idempotentReplay && <p className="text-[10px] text-amber-700">Idempotent replay — same receipt, no new order.</p>}
           </>
         )}
         {!demo && (
