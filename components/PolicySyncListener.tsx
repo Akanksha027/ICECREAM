@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { auditStore, useAuditStore } from "@/lib/auditStore";
+import { auditStore } from "@/lib/auditStore";
+import { useAuditStore } from "@/lib/useAuditStore";
 import type { PolicyConfig } from "@/lib/engine";
 import { useDemoMode } from "@/hooks/useDemoMode";
 

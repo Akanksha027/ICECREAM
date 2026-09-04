@@ -3,7 +3,8 @@
 import { useState, MouseEvent, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { runSanityCheck, runPolicyCheck, runConfidenceCheck, runVelocityCheck } from "@/lib/engine";
-import { auditStore, useAuditStore, genId, fireEscalationWebhook, type DecisionStatus } from "@/lib/auditStore";
+import { auditStore, genId, fireEscalationWebhook, type DecisionStatus } from "@/lib/auditStore";
+import { useAuditStore } from "@/lib/useAuditStore";
 import { useDemoMode } from "@/hooks/useDemoMode";
 import { openRazorpayCheckout } from "@/lib/razorpayClient";
 

@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useAuditStore, auditStore, type AuditEntry } from "@/lib/auditStore";
+import { auditStore, type AuditEntry } from "@/lib/auditStore";
+import { useAuditStore } from "@/lib/useAuditStore";
 import { useDemoMode } from "@/hooks/useDemoMode";
 
 function StatusBadge({ status }: { status: AuditEntry["status"] }) {

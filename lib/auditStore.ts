@@ -225,35 +225,6 @@ class AuditStore {
 // Singleton
 export const auditStore = new AuditStore();
 
-// React hook
-import { useSyncExternalStore, useCallback } from "react";
-
-export function useAuditStore() {
-  const subscribe = useCallback((cb: () => void) => auditStore.subscribe(cb), []);
-  const getSnapshot = useCallback(() => auditStore.version, []);
-  // Required for Next.js static prerender / SSR — must be stable & match initial client state
-  const getServerSnapshot = useCallback(() => 0, []);
-
-  useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-
-  // Return a getter-style object (reads are always fresh since we re-render on version change)
-  return {
-    entries: auditStore.getEntries(),
-    pendingApprovals: auditStore.getPendingApprovals(),
-    stats: auditStore.stats,
-    budgetUsed: auditStore.budgetUsed,
-    budgetRemaining: auditStore.budgetRemaining,
-    revenueRecovered: auditStore.revenueRecovered,
-    aiCostSpent: auditStore.aiCostSpent,
-    trustScore: auditStore.trustScore,
-    policy: auditStore.policy,
-    policySyncedAt: auditStore.policySyncedAt,
-    webhookLog: auditStore.webhookLog,
-    totalDecisions: auditStore.totalDecisions,
-    recentDiscountEvents: auditStore.recentDiscountEvents,
-  };
-}
-
 export function genId() {
   return "dec_" + Math.random().toString(36).substr(2, 9) + "_" + Date.now().toString(36);
 }
