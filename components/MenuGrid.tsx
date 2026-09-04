@@ -198,13 +198,17 @@ function CheckoutFlow({
           aiCostInr: data.decision.aiCostInr ?? data.usage?.aiCostInr ?? 0.12,
         };
       } catch {
+        // Client-side last resort — server already returns a varied fallback
+        const leftovers = ITEMS.filter((i) => !cart.some((c) => c.name === i.name));
+        const pick = leftovers[Math.floor(Math.random() * Math.max(leftovers.length, 1))] || ITEMS[5];
+        const pct = 5 + Math.floor(Math.random() * 14); // 5–18%
         decision = {
-          upsellItemName: "Brown Butter Chip",
-          proposedDiscountPct: 10,
-          originalPrice: 4.00,
-          discountedPrice: 3.60,
-          aiReasoning: "AI service unavailable. Falling back to conservative 10% discount on a complementary cookie.",
-          cfoCast: "Fallback: $0.40 discount (≈₹33). Minimal budget impact.",
+          upsellItemName: pick.name,
+          proposedDiscountPct: pct,
+          originalPrice: pick.price,
+          discountedPrice: Math.round(pick.price * (1 - pct / 100) * 100) / 100,
+          aiReasoning: "AI service unavailable. Falling back to a small complementary discount.",
+          cfoCast: `Fallback: $${(pick.price * pct / 100).toFixed(2)} discount. Minimal budget impact.`,
           riskScore: 15,
           confidence: 35,
           aiCostInr: 0,
@@ -566,11 +570,7 @@ function CheckoutFlow({
               <span className="font-bold">Rule-checker:</span> {ruleVerdict}
             </p>
           </>
-        ) : (
-          <p className="text-[11px] text-brown/55 leading-relaxed">
-            Complements what&apos;s already in your bag — accept to add it at the discounted price.
-          </p>
-        )}
+        ) : null}
         <div className="flex gap-2">
           <button onClick={() => processRazorpayOrder(false)} className="flex-1 rounded-full bg-white text-brown py-2 text-xs font-bold border border-brown/20 hover:bg-gray-50 transition-all">
             No thanks
@@ -595,9 +595,6 @@ function CheckoutFlow({
             {aiDecision.proposedDiscountPct > 0 && (
               <span className="text-brown/50"> ({aiDecision.proposedDiscountPct}% off)</span>
             )}
-          </p>
-          <p className="text-[11px] text-brown/50">
-            Complements what&apos;s in your bag — add it now or continue with your current order.
           </p>
           <div className="flex gap-2">
             <button
