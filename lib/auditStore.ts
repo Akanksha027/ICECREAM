@@ -214,9 +214,12 @@ import { useSyncExternalStore, useCallback } from "react";
 export function useAuditStore() {
   const subscribe = useCallback((cb: () => void) => auditStore.subscribe(cb), []);
   const getSnapshot = useCallback(() => auditStore.version, []);
+  // Required for Next.js static prerender / SSR — must be stable & match initial client state
+  const getServerSnapshot = useCallback(() => 0, []);
 
-  useSyncExternalStore(subscribe, getSnapshot);
+  useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
+  // Return a getter-style object (reads are always fresh since we re-render on version change)
   return {
     entries: auditStore.getEntries(),
     pendingApprovals: auditStore.getPendingApprovals(),
