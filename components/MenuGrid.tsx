@@ -237,17 +237,7 @@ export default function MenuGrid() {
                     ${totalAmount.toFixed(2)}
                   </span>
                 </div>
-                <button
-                  disabled={cart.length === 0}
-                  className="w-full rounded-full bg-[#DA758C] text-white py-4 font-bold tracking-wide hover:bg-[#c9637a] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                  onClick={() => {
-                    alert("Proceeding to checkout with " + cart.length + " items!");
-                    setCart([]);
-                    setIsCartOpen(false);
-                  }}
-                >
-                  Checkout
-                </button>
+                <CheckoutFlow cart={cart} setCart={setCart} setIsCartOpen={setIsCartOpen} totalAmount={totalAmount} ITEMS={ITEMS} />
               </div>
             </motion.div>
           </>
@@ -255,4 +245,122 @@ export default function MenuGrid() {
       </AnimatePresence>
     </section>
   );
+}
+
+function CheckoutFlow({
+  cart,
+  setCart,
+  setIsCartOpen,
+  totalAmount,
+  ITEMS,
+}: {
+  cart: CartItem[];
+  setCart: any;
+  setIsCartOpen: any;
+  totalAmount: number;
+  ITEMS: any[];
+}) {
+  const [state, setState] = useState<"idle" | "analyzing" | "offer" | "processing" | "success">("idle");
+  const [offerItem, setOfferItem] = useState<any>(null);
+
+  const startCheckout = () => {
+    setState("analyzing");
+    // Simulate AI analyzing cart
+    setTimeout(() => {
+      // Pick an item not in cart
+      const cartNames = cart.map((c) => c.name);
+      const availableUpsells = ITEMS.filter((i) => !cartNames.includes(i.name));
+      if (availableUpsells.length > 0 && Math.random() > 0.3) {
+        setOfferItem(availableUpsells[Math.floor(Math.random() * availableUpsells.length)]);
+        setState("offer");
+      } else {
+        processOrder();
+      }
+    }, 1500);
+  };
+
+  const processOrder = () => {
+    setState("processing");
+    setTimeout(() => {
+      setState("success");
+      setTimeout(() => {
+        setCart([]);
+        setIsCartOpen(false);
+        setState("idle");
+      }, 3000);
+    }, 2000);
+  };
+
+  const acceptOffer = () => {
+    setCart((prev: any) => [...prev, { ...offerItem, id: Math.random().toString(36).substr(2, 9), price: "$2.00" }]); // Discounted price!
+    processOrder();
+  };
+
+  if (state === "idle") {
+    return (
+      <button
+        disabled={cart.length === 0}
+        className="w-full rounded-full bg-[#DA758C] text-white py-4 font-bold tracking-wide hover:bg-[#c9637a] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+        onClick={startCheckout}
+      >
+        Checkout
+      </button>
+    );
+  }
+
+  if (state === "analyzing") {
+    return (
+      <div className="w-full rounded-full bg-gray-100 py-4 flex items-center justify-center gap-3 border border-gray-200 text-brown">
+        <span className="flex size-4 items-center justify-center rounded-full bg-blue-500/20 pulse-dot">
+          <span className="size-2 rounded-full bg-blue-500" />
+        </span>
+        <span className="text-sm font-medium animate-pulse">Profit Pilot AI is analyzing your order...</span>
+      </div>
+    );
+  }
+
+  if (state === "offer") {
+    return (
+      <div className="w-full rounded-2xl bg-blue-50 p-4 border border-blue-100 shadow-inner">
+        <div className="flex items-center gap-2 mb-3">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-blue-500" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
+          <span className="text-xs font-bold uppercase tracking-wider text-blue-600">Special Offer Unlocked</span>
+        </div>
+        <p className="text-sm font-medium text-brown leading-snug mb-4">
+          Wait! Want to add a <span className="font-bold">{offerItem.name}</span> for just <span className="font-bold text-bright-raspberry">$2.00</span>?
+        </p>
+        <div className="flex gap-2">
+          <button onClick={processOrder} className="flex-1 rounded-full bg-white text-brown py-2 text-xs font-bold border border-brown/20 hover:bg-gray-50 transition-all">
+            No thanks
+          </button>
+          <button onClick={acceptOffer} className="flex-1 rounded-full bg-blue-500 text-white py-2 text-xs font-bold hover:bg-blue-600 shadow-sm transition-all">
+            Add to Order
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state === "processing") {
+    return (
+      <div className="w-full rounded-full bg-gray-100 py-4 flex items-center justify-center gap-2 text-brown">
+        <svg className="animate-spin h-5 w-5 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span className="text-sm font-medium">Redirecting to Razorpay...</span>
+      </div>
+    );
+  }
+
+  if (state === "success") {
+    return (
+      <div className="w-full rounded-full bg-green-50 py-4 flex items-center justify-center gap-2 text-green-700 border border-green-200">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
+        <span className="text-sm font-bold">Payment Simulator Complete!</span>
+      </div>
+    );
+  }
+
+  return null;
 }
