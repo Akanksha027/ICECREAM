@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, MouseEvent } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 
 const ITEMS = [
   {
@@ -48,7 +48,19 @@ const ITEMS = [
   },
 ];
 
-function PolaroidCard({ item, i }: { item: (typeof ITEMS)[number]; i: number }) {
+type CartItem = (typeof ITEMS)[number] & { id: string };
+
+function PolaroidCard({
+  item,
+  i,
+  onAdd,
+  onBuy,
+}: {
+  item: (typeof ITEMS)[number];
+  i: number;
+  onAdd: (item: (typeof ITEMS)[number]) => void;
+  onBuy: (item: (typeof ITEMS)[number]) => void;
+}) {
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
 
   function handleMove(e: MouseEvent<HTMLDivElement>) {
@@ -69,31 +81,65 @@ function PolaroidCard({ item, i }: { item: (typeof ITEMS)[number]; i: number }) 
       style={{
         transform: `perspective(800px) rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)`,
       }}
-      className="group relative rounded-md border border-border bg-polaroid p-3 pb-5 shadow-md transition-shadow hover:shadow-2xl"
+      className="group relative rounded-md border border-border bg-polaroid p-3 pb-5 shadow-md transition-shadow hover:shadow-2xl flex flex-col justify-between"
     >
-      <div className="relative overflow-hidden rounded-sm">
-        <img
-          src={item.image}
-          alt={item.name}
-          className="h-56 w-full object-cover transition-transform duration-500 group-hover:scale-110"
-        />
-        <span className="absolute left-2 top-2 rounded-full bg-cream/90 px-3 py-1 text-[11px] font-semibold tracking-wide text-brown">
-          {item.kind}
-        </span>
+      <div>
+        <div className="relative overflow-hidden rounded-sm">
+          <img
+            src={item.image}
+            alt={item.name}
+            className="h-56 w-full object-cover transition-transform duration-500 group-hover:scale-110"
+          />
+          <span className="absolute left-2 top-2 rounded-full bg-cream/90 px-3 py-1 text-[11px] font-semibold tracking-wide text-brown">
+            {item.kind}
+          </span>
+        </div>
+        <div className="flex items-baseline justify-between px-1 pt-4">
+          <h3 className="font-script text-2xl text-brown">{item.name}</h3>
+          <span className="font-display font-semibold text-bright-raspberry">
+            {item.price}
+          </span>
+        </div>
       </div>
-      <div className="flex items-baseline justify-between px-1 pt-4">
-        <h3 className="font-script text-2xl text-brown">{item.name}</h3>
-        <span className="font-display font-semibold text-bright-raspberry">
-          {item.price}
-        </span>
+      <div className="mt-5 flex gap-2">
+        <button
+          onClick={() => onAdd(item)}
+          className="flex-1 rounded-full border-2 border-[#E390A1] text-[#DA758C] hover:bg-[#E390A1] hover:text-white py-2 text-xs font-bold transition-all"
+        >
+          Add to Cart
+        </button>
+        <button
+          onClick={() => onBuy(item)}
+          className="flex-1 rounded-full bg-[#DA758C] text-white py-2 text-xs font-bold hover:bg-[#c9637a] shadow-sm transition-all"
+        >
+          Buy Now
+        </button>
       </div>
     </motion.div>
   );
 }
 
 export default function MenuGrid() {
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+
+  const handleAdd = (item: (typeof ITEMS)[number]) => {
+    setCart((prev) => [...prev, { ...item, id: Math.random().toString(36).substr(2, 9) }]);
+  };
+
+  const handleBuy = (item: (typeof ITEMS)[number]) => {
+    handleAdd(item);
+    setIsCartOpen(true);
+  };
+
+  const removeItem = (id: string) => {
+    setCart((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const totalAmount = cart.reduce((acc, item) => acc + parseFloat(item.price.replace("$", "")), 0);
+
   return (
-    <section id="menu" className="bg-blush/40 pt-12 pb-24 md:pt-16 md:pb-32">
+    <section id="menu" className="relative bg-blush/40 pt-12 pb-24 md:pt-16 md:pb-32">
       <div className="mx-auto max-w-6xl px-6">
         <div className="mb-14 flex flex-col items-start justify-between gap-4 md:flex-row md:items-end">
           <div>
@@ -110,10 +156,103 @@ export default function MenuGrid() {
 
         <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
           {ITEMS.map((item, i) => (
-            <PolaroidCard key={item.name} item={item} i={i} />
+            <PolaroidCard key={item.name} item={item} i={i} onAdd={handleAdd} onBuy={handleBuy} />
           ))}
         </div>
       </div>
+
+      {/* Floating Cart Button */}
+      {cart.length > 0 && (
+        <button
+          onClick={() => setIsCartOpen(true)}
+          className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-[#DA758C] text-white shadow-xl hover:scale-105 transition-transform"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="8" cy="21" r="1" />
+            <circle cx="19" cy="21" r="1" />
+            <path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" />
+          </svg>
+          <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-yellow-400 text-[10px] font-bold text-brown">
+            {cart.length}
+          </span>
+        </button>
+      )}
+
+      {/* Cart Drawer */}
+      <AnimatePresence>
+        {isCartOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsCartOpen(false)}
+              className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-sm border-l border-white/20 bg-[#FDF6F5] p-6 shadow-2xl overflow-y-auto flex flex-col"
+            >
+              <div className="flex items-center justify-between mb-8">
+                <h2 className="font-display text-2xl font-semibold text-brown">Your Cart</h2>
+                <button
+                  onClick={() => setIsCartOpen(false)}
+                  className="rounded-full bg-white p-2 text-brown shadow-sm hover:bg-gray-50"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+              </div>
+
+              {cart.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center opacity-60">
+                  <p className="text-sm font-medium text-brown">Your cart is currently empty.</p>
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col gap-4">
+                  {cart.map((item) => (
+                    <div key={item.id} className="flex items-center gap-4 rounded-xl bg-white p-3 shadow-sm border border-black/5">
+                      <img src={item.image} alt={item.name} className="h-16 w-16 rounded-md object-cover" />
+                      <div className="flex-1">
+                        <p className="font-medium text-brown text-sm">{item.name}</p>
+                        <p className="font-semibold text-bright-raspberry text-xs mt-1">{item.price}</p>
+                      </div>
+                      <button
+                        onClick={() => removeItem(item.id)}
+                        className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-auto pt-6 border-t border-brown/10">
+                <div className="flex justify-between items-center mb-6">
+                  <span className="font-medium text-brown">Total</span>
+                  <span className="font-display font-semibold text-2xl text-bright-raspberry">
+                    ${totalAmount.toFixed(2)}
+                  </span>
+                </div>
+                <button
+                  disabled={cart.length === 0}
+                  className="w-full rounded-full bg-[#DA758C] text-white py-4 font-bold tracking-wide hover:bg-[#c9637a] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                  onClick={() => {
+                    alert("Proceeding to checkout with " + cart.length + " items!");
+                    setCart([]);
+                    setIsCartOpen(false);
+                  }}
+                >
+                  Checkout
+                </button>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </section>
   );
 }
