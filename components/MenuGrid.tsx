@@ -587,22 +587,38 @@ function CheckoutFlow({
     if (!demo) {
       return (
         <div className="w-full rounded-2xl bg-white p-4 border border-brown/10 shadow-inner space-y-3">
-          <p className="text-xs font-bold uppercase tracking-wider text-brown/50">One moment</p>
+          <p className="text-xs font-bold uppercase tracking-wider text-[#DA758C]">Special for you</p>
           <p className="text-sm font-medium text-brown leading-snug">
-            Checking with the shop — we&apos;ll confirm your discount in a moment.
+            Add <span className="font-bold">{aiDecision.upsellItemName}</span> for{" "}
+            <span className="line-through text-brown/40">${aiDecision.originalPrice.toFixed(2)}</span>{" "}
+            <span className="font-bold text-bright-raspberry">${aiDecision.discountedPrice.toFixed(2)}</span>
+            {aiDecision.proposedDiscountPct > 0 && (
+              <span className="text-brown/50"> ({aiDecision.proposedDiscountPct}% off)</span>
+            )}
           </p>
           <p className="text-[11px] text-brown/50">
-            You can continue with your current order while we sort it out.
+            Complements what&apos;s in your bag — add it now or continue with your current order.
           </p>
-          <button
-            onClick={() => {
-              if (pendingEntryId) auditStore.rejectEntry(pendingEntryId);
-              processRazorpayOrder(false);
-            }}
-            className="w-full rounded-full bg-[#DA758C] text-white py-2.5 text-xs font-bold hover:bg-[#c9637a] transition-all"
-          >
-            Continue without offer
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                if (pendingEntryId) auditStore.rejectEntry(pendingEntryId);
+                processRazorpayOrder(false);
+              }}
+              className="flex-1 rounded-full bg-white text-brown py-2 text-xs font-bold border border-brown/20 hover:bg-gray-50 transition-all"
+            >
+              No thanks
+            </button>
+            <button
+              onClick={() => {
+                if (pendingEntryId) auditStore.approveEntry(pendingEntryId);
+                processRazorpayOrder(true);
+              }}
+              className="flex-1 rounded-full bg-[#DA758C] text-white py-2 text-xs font-bold hover:bg-[#c9637a] shadow-sm transition-all"
+            >
+              Add to Order
+            </button>
+          </div>
         </div>
       );
     }
