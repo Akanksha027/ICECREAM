@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { auditStore, useAuditStore } from "@/lib/auditStore";
 import type { PolicyConfig } from "@/lib/engine";
+import { useDemoMode } from "@/hooks/useDemoMode";
 
 const POLICY_MSG = "PROFIT_PILOT_POLICY";
 
@@ -11,9 +12,12 @@ const POLICY_MSG = "PROFIT_PILOT_POLICY";
  * 1. postMessage (dashboard iframe parent)
  * 2. BroadcastChannel (same-browser dual-tab demo)
  * 3. Polling /api/policy (when dashboard POSTs to sweetdrip)
+ *
+ * Badge UI is demo-only — sync always runs for the merchant dashboard.
  */
 export default function PolicySyncListener() {
   const store = useAuditStore();
+  const demo = useDemoMode();
   const [flash, setFlash] = useState(false);
 
   useEffect(() => {
@@ -41,7 +45,6 @@ export default function PolicySyncListener() {
       /* BroadcastChannel unavailable */
     }
 
-    // Poll server mirror every 2s so dashboard POST /api/policy lands here
     const poll = setInterval(async () => {
       try {
         const res = await fetch("/api/policy", { cache: "no-store" });
@@ -68,6 +71,8 @@ export default function PolicySyncListener() {
       clearInterval(poll);
     };
   }, []);
+
+  if (!demo) return null;
 
   const p = store.policy;
 

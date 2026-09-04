@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuditStore, auditStore, type AuditEntry } from "@/lib/auditStore";
+import { useDemoMode } from "@/hooks/useDemoMode";
 
 function StatusBadge({ status }: { status: AuditEntry["status"] }) {
   const map: Record<string, { bg: string; text: string; label: string }> = {
@@ -187,10 +188,13 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
 }
 
 export default function AuditDrawer() {
+  const demo = useDemoMode();
   const [isOpen, setIsOpen] = useState(false);
   const [tab, setTab] = useState<"log" | "alerts">("log");
   const store = useAuditStore();
   const net = store.revenueRecovered - store.aiCostSpent;
+
+  if (!demo) return null;
 
   return (
     <>

@@ -4,6 +4,7 @@ import { useState, MouseEvent, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { runSanityCheck, runPolicyCheck, runConfidenceCheck } from "@/lib/engine";
 import { auditStore, useAuditStore, genId, fireEscalationWebhook, type DecisionStatus } from "@/lib/auditStore";
+import { useDemoMode } from "@/hooks/useDemoMode";
 
 // ─── Menu Items ──────────────────────────────────────────────────────────────
 
@@ -103,12 +104,14 @@ interface AIDecision {
 function CheckoutFlow({
   cart, setCart, setIsCartOpen,
   checkoutMode, setCheckoutMode,
+  demo,
 }: {
   cart: CartItem[];
   setCart: (fn: (prev: CartItem[]) => CartItem[]) => void;
   setIsCartOpen: (v: boolean) => void;
   checkoutMode: CheckoutMode;
   setCheckoutMode: (m: CheckoutMode) => void;
+  demo: boolean;
 }) {
   const [state, setState] = useState<FlowState>("idle");
   const [aiDecision, setAiDecision] = useState<AIDecision | null>(null);
@@ -471,96 +474,108 @@ function CheckoutFlow({
   if (state === "idle") {
     return (
       <div className="space-y-3">
-        {/* Mode toggles */}
-        <div className="flex flex-wrap gap-1.5">
-          {(["normal", "simulate_outage", "bad_ai", "villain", "low_confidence"] as CheckoutMode[]).map((mode) => {
-            const labels: Record<CheckoutMode, string> = {
-              normal: "✓ Normal",
-              simulate_outage: "⚡ Outage",
-              bad_ai: "🤖 Bad AI",
-              villain: "😈 Villain",
-              low_confidence: "❓ Low Conf",
-            };
-            return (
-              <button
-                key={mode}
-                onClick={() => setCheckoutMode(mode)}
-                className={`rounded-full px-3 py-1 text-[10px] font-bold transition-all ${
-                  checkoutMode === mode
-                    ? "bg-brown text-white"
-                    : "bg-white text-brown/60 border border-brown/10 hover:border-brown/30"
-                }`}
-              >
-                {labels[mode]}
-              </button>
-            );
-          })}
-        </div>
+        {demo && (
+          <div className="flex flex-wrap gap-1.5">
+            {(["normal", "simulate_outage", "bad_ai", "villain", "low_confidence"] as CheckoutMode[]).map((mode) => {
+              const labels: Record<CheckoutMode, string> = {
+                normal: "✓ Normal",
+                simulate_outage: "⚡ Outage",
+                bad_ai: "🤖 Bad AI",
+                villain: "😈 Villain",
+                low_confidence: "❓ Low Conf",
+              };
+              return (
+                <button
+                  key={mode}
+                  onClick={() => setCheckoutMode(mode)}
+                  className={`rounded-full px-3 py-1 text-[10px] font-bold transition-all ${
+                    checkoutMode === mode
+                      ? "bg-brown text-white"
+                      : "bg-white text-brown/60 border border-brown/10 hover:border-brown/30"
+                  }`}
+                >
+                  {labels[mode]}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         <button
           disabled={cart.length === 0}
           className="w-full rounded-full bg-[#DA758C] text-white py-4 font-bold tracking-wide hover:bg-[#c9637a] shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           onClick={startCheckout}
         >
-          Checkout{checkoutMode !== "normal" ? ` (${checkoutMode.replace("_", " ")})` : ""}
+          Checkout{demo && checkoutMode !== "normal" ? ` (${checkoutMode.replace("_", " ")})` : ""}
         </button>
       </div>
     );
   }
 
-  if (state === "ai_thinking") {
+  if (state === "ai_thinking" || state === "rule_checking") {
     return (
-      <div className="w-full rounded-2xl bg-blue-50 py-4 flex flex-col items-center justify-center gap-2 border border-blue-100 text-brown">
+      <div className="w-full rounded-2xl bg-blush/60 py-4 flex flex-col items-center justify-center gap-2 border border-brown/10 text-brown">
         <div className="flex items-center gap-2">
-          <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span></span>
-          <span className="text-sm font-medium">Profit Pilot AI is analyzing your order...</span>
+          <span className="relative flex h-3 w-3">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#DA758C] opacity-75" />
+            <span className="relative inline-flex rounded-full h-3 w-3 bg-[#DA758C]" />
+          </span>
+          <span className="text-sm font-medium">
+            {demo
+              ? state === "ai_thinking"
+                ? "Profit Pilot AI is analyzing your order..."
+                : "Running safety checks..."
+              : "Looking for a little something extra…"}
+          </span>
         </div>
-        <p className="text-[10px] text-brown/40">Calling Gemini AI for upsell reasoning</p>
-      </div>
-    );
-  }
-
-  if (state === "rule_checking") {
-    return (
-      <div className="w-full rounded-2xl bg-yellow-50 py-4 flex flex-col items-center justify-center gap-2 border border-yellow-100 text-brown">
-        <div className="flex items-center gap-2">
-          <svg className="animate-spin h-4 w-4 text-yellow-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-          <span className="text-sm font-medium">Running safety checks...</span>
-        </div>
-        <p className="text-[10px] text-brown/40">Sanity → policy → AI confidence gate</p>
+        {demo && (
+          <p className="text-[10px] text-brown/40">
+            {state === "ai_thinking" ? "Calling Gemini AI for upsell reasoning" : "Sanity → policy → AI confidence gate"}
+          </p>
+        )}
       </div>
     );
   }
 
   if (state === "offer" && aiDecision) {
     return (
-      <div className="w-full rounded-2xl bg-blue-50 p-4 border border-blue-100 shadow-inner space-y-3">
-        <div className="flex items-center gap-2">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-blue-500" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>
-          <span className="text-xs font-bold uppercase tracking-wider text-blue-600">AI Offer — Auto-Approved ✓</span>
-        </div>
+      <div className="w-full rounded-2xl bg-white p-4 border border-brown/10 shadow-inner space-y-3">
+        <p className="text-xs font-bold uppercase tracking-wider text-[#DA758C]">
+          {demo ? "AI Offer — Auto-Approved ✓" : "Special for you"}
+        </p>
         <p className="text-sm font-medium text-brown leading-snug">
           Add <span className="font-bold">{aiDecision.upsellItemName}</span> for{" "}
           <span className="line-through text-brown/40">${aiDecision.originalPrice.toFixed(2)}</span>{" "}
           <span className="font-bold text-bright-raspberry">${aiDecision.discountedPrice.toFixed(2)}</span>
+          {!demo && aiDecision.proposedDiscountPct > 0 && (
+            <span className="text-brown/50"> ({aiDecision.proposedDiscountPct}% off)</span>
+          )}
         </p>
-        <p className="text-[10px] text-brown/60 leading-relaxed italic">"{aiDecision.aiReasoning}"</p>
-        <div className="flex flex-wrap gap-2 text-[10px]">
-          <span className="rounded-full bg-white/80 px-2 py-0.5 font-medium text-brown/70">
-            Confidence {aiDecision.confidence ?? 70}%
-          </span>
-          <span className="rounded-full bg-white/80 px-2 py-0.5 font-medium text-brown/70">
-            AI cost ₹{(aiDecision.aiCostInr ?? 0.12).toFixed(2)}
-          </span>
-        </div>
-        <p className="text-[10px] text-brown/40 bg-white/60 rounded-lg p-2">
-          <span className="font-bold">Rule-checker:</span> {ruleVerdict}
-        </p>
+        {demo ? (
+          <>
+            <p className="text-[10px] text-brown/60 leading-relaxed italic">&quot;{aiDecision.aiReasoning}&quot;</p>
+            <div className="flex flex-wrap gap-2 text-[10px]">
+              <span className="rounded-full bg-blush/80 px-2 py-0.5 font-medium text-brown/70">
+                Confidence {aiDecision.confidence ?? 70}%
+              </span>
+              <span className="rounded-full bg-blush/80 px-2 py-0.5 font-medium text-brown/70">
+                AI cost ₹{(aiDecision.aiCostInr ?? 0.12).toFixed(2)}
+              </span>
+            </div>
+            <p className="text-[10px] text-brown/40 bg-blush/40 rounded-lg p-2">
+              <span className="font-bold">Rule-checker:</span> {ruleVerdict}
+            </p>
+          </>
+        ) : (
+          <p className="text-[11px] text-brown/55 leading-relaxed">
+            Complements what&apos;s already in your bag — accept to add it at the discounted price.
+          </p>
+        )}
         <div className="flex gap-2">
           <button onClick={() => processRazorpayOrder(false)} className="flex-1 rounded-full bg-white text-brown py-2 text-xs font-bold border border-brown/20 hover:bg-gray-50 transition-all">
             No thanks
           </button>
-          <button onClick={() => processRazorpayOrder(true)} className="flex-1 rounded-full bg-blue-500 text-white py-2 text-xs font-bold hover:bg-blue-600 shadow-sm transition-all">
+          <button onClick={() => processRazorpayOrder(true)} className="flex-1 rounded-full bg-[#DA758C] text-white py-2 text-xs font-bold hover:bg-[#c9637a] shadow-sm transition-all">
             Add to Order
           </button>
         </div>
@@ -569,6 +584,29 @@ function CheckoutFlow({
   }
 
   if (state === "escalated" && aiDecision) {
+    if (!demo) {
+      return (
+        <div className="w-full rounded-2xl bg-white p-4 border border-brown/10 shadow-inner space-y-3">
+          <p className="text-xs font-bold uppercase tracking-wider text-brown/50">One moment</p>
+          <p className="text-sm font-medium text-brown leading-snug">
+            Checking with the shop — we&apos;ll confirm your discount in a moment.
+          </p>
+          <p className="text-[11px] text-brown/50">
+            You can continue with your current order while we sort it out.
+          </p>
+          <button
+            onClick={() => {
+              if (pendingEntryId) auditStore.rejectEntry(pendingEntryId);
+              processRazorpayOrder(false);
+            }}
+            className="w-full rounded-full bg-[#DA758C] text-white py-2.5 text-xs font-bold hover:bg-[#c9637a] transition-all"
+          >
+            Continue without offer
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div className="w-full rounded-2xl bg-orange-50 p-4 border border-orange-200 shadow-inner space-y-3">
         <div className="flex items-center gap-2">
@@ -579,7 +617,7 @@ function CheckoutFlow({
           AI wants to offer <span className="font-bold">{aiDecision.upsellItemName}</span> at{" "}
           <span className="font-bold text-bright-raspberry">{aiDecision.proposedDiscountPct}% off</span>
         </p>
-        <p className="text-[10px] text-brown/60 italic">"{aiDecision.aiReasoning}"</p>
+        <p className="text-[10px] text-brown/60 italic">&quot;{aiDecision.aiReasoning}&quot;</p>
         <div className="flex flex-wrap gap-2 text-[10px]">
           <span className="rounded-full bg-white/80 px-2 py-0.5 font-medium text-orange-700">
             Confidence {aiDecision.confidence ?? 70}%
@@ -604,6 +642,22 @@ function CheckoutFlow({
   }
 
   if ((state === "anomaly_caught" || state === "villain_blocked") && aiDecision) {
+    if (!demo) {
+      return (
+        <div className="w-full rounded-2xl bg-white p-4 border border-brown/10 shadow-inner space-y-3">
+          <p className="text-sm font-medium text-brown leading-snug">
+            That special offer isn&apos;t available right now — no worries, your cart is ready.
+          </p>
+          <button
+            onClick={() => processRazorpayOrder(false)}
+            className="w-full rounded-full bg-[#DA758C] text-white py-2.5 text-xs font-bold hover:bg-[#c9637a] transition-all"
+          >
+            Continue to checkout
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div className="w-full rounded-2xl bg-red-50 p-4 border border-red-200 shadow-inner space-y-3">
         <div className="flex items-center gap-2">
@@ -615,7 +669,7 @@ function CheckoutFlow({
         <p className="text-sm font-medium text-brown">
           AI proposed <span className="font-bold text-red-600">{aiDecision.proposedDiscountPct}% off</span> on {aiDecision.upsellItemName}
         </p>
-        <p className="text-[10px] text-brown/60 italic">"{aiDecision.aiReasoning}"</p>
+        <p className="text-[10px] text-brown/60 italic">&quot;{aiDecision.aiReasoning}&quot;</p>
         <div className="text-[10px] text-red-700 bg-red-100 rounded-lg p-2 font-medium">
           <span className="font-bold">Blocked by:</span> {ruleVerdict}
         </div>
@@ -629,27 +683,36 @@ function CheckoutFlow({
 
   if (state === "processing_razorpay") {
     return (
-      <div className="w-full rounded-2xl bg-gray-50 py-4 flex flex-col items-center justify-center gap-2 border border-gray-200 text-brown">
+      <div className="w-full rounded-2xl bg-blush/40 py-4 flex flex-col items-center justify-center gap-2 border border-brown/10 text-brown">
         <div className="flex items-center gap-2">
           <svg className="animate-spin h-5 w-5 text-[#DA758C]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-          <span className="text-sm font-medium">Creating Razorpay order...</span>
+          <span className="text-sm font-medium">{demo ? "Creating Razorpay order..." : "Placing your order…"}</span>
         </div>
-        <p className="text-[10px] text-brown/40">Real test-mode API call in progress</p>
+        {demo && <p className="text-[10px] text-brown/40">Real test-mode API call in progress</p>}
       </div>
     );
   }
 
   if (state === "api_failure") {
     return (
-      <div className="w-full rounded-2xl bg-gray-100 p-4 border border-gray-300 shadow-inner space-y-3">
-        <div className="flex items-center gap-2">
-          <span className="text-gray-500 text-lg">⚡</span>
-          <span className="text-xs font-bold uppercase tracking-wider text-gray-600">Razorpay API Failure — Order Held Safely</span>
-        </div>
-        <p className="text-xs text-brown/70">{failureMsg}</p>
-        <p className="text-[10px] text-brown/40">No charge was created. The customer was not billed. Safe to retry.</p>
+      <div className="w-full rounded-2xl bg-white p-4 border border-brown/10 shadow-inner space-y-3">
+        {demo ? (
+          <>
+            <div className="flex items-center gap-2">
+              <span className="text-gray-500 text-lg">⚡</span>
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-600">Razorpay API Failure — Order Held Safely</span>
+            </div>
+            <p className="text-xs text-brown/70">{failureMsg}</p>
+            <p className="text-[10px] text-brown/40">No charge was created. The customer was not billed. Safe to retry.</p>
+          </>
+        ) : (
+          <>
+            <p className="text-sm font-medium text-brown">Something went wrong placing your order.</p>
+            <p className="text-[11px] text-brown/50">You weren&apos;t charged. Please try again in a moment.</p>
+          </>
+        )}
         <button onClick={resetFlow} className="w-full rounded-full bg-brown text-white py-2 text-xs font-bold hover:bg-brown/90 transition-all">
-          Dismiss
+          {demo ? "Dismiss" : "Try again"}
         </button>
       </div>
     );
@@ -660,10 +723,19 @@ function CheckoutFlow({
       <div className="w-full rounded-2xl bg-green-50 p-4 border border-green-200 shadow-inner space-y-2">
         <div className="flex items-center gap-2">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-600"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg>
-          <span className="text-sm font-bold text-green-700">Order Created Successfully!</span>
+          <span className="text-sm font-bold text-green-700">
+            {demo ? "Order Created Successfully!" : "Order placed — thank you!"}
+          </span>
         </div>
-        <p className="text-xs font-mono text-blue-600">Razorpay Order: {razorpayId}</p>
-        <p className="text-[10px] text-brown/40">Logged to audit trail. Cart will clear shortly.</p>
+        {demo && (
+          <>
+            <p className="text-xs font-mono text-blue-600">Razorpay Order: {razorpayId}</p>
+            <p className="text-[10px] text-brown/40">Logged to audit trail. Cart will clear shortly.</p>
+          </>
+        )}
+        {!demo && (
+          <p className="text-[11px] text-brown/50">We&apos;re getting your sweets ready. See you soon.</p>
+        )}
       </div>
     );
   }
@@ -674,9 +746,12 @@ function CheckoutFlow({
 // ─── Main MenuGrid ───────────────────────────────────────────────────────────
 
 export default function MenuGrid() {
+  const demo = useDemoMode();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [checkoutMode, setCheckoutMode] = useState<CheckoutMode>("normal");
+
+  const effectiveMode: CheckoutMode = demo ? checkoutMode : "normal";
 
   const handleAdd = (item: MenuItem) => {
     setCart(prev => [...prev, { ...item, id: Math.random().toString(36).substr(2, 9) }]);
@@ -752,16 +827,30 @@ export default function MenuGrid() {
                 </div>
               ) : (
                 <div className="flex-1 flex flex-col gap-3">
-                  {cart.map(item => (
-                    <div key={item.id} className="flex items-center gap-3 rounded-xl bg-white p-3 shadow-sm border border-black/5">
+                  {cart.reduce((acc, item) => {
+                    const existing = acc.find(i => i.name === item.name);
+                    if (existing) {
+                      existing.quantity += 1;
+                      existing.ids.push(item.id);
+                    } else {
+                      acc.push({ ...item, quantity: 1, ids: [item.id] });
+                    }
+                    return acc;
+                  }, [] as (MenuItem & { quantity: number, ids: string[] })[]).map(item => (
+                    <div key={item.name} className="flex items-center gap-3 rounded-xl bg-white p-3 shadow-sm border border-black/5">
                       <img src={item.image} alt={item.name} className="h-14 w-14 rounded-md object-cover" />
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-brown text-sm truncate">{item.name}</p>
                         <p className="font-semibold text-bright-raspberry text-xs mt-0.5">${item.price.toFixed(2)}</p>
                       </div>
-                      <button onClick={() => removeItem(item.id)} className="p-1.5 text-gray-400 hover:text-red-500 transition-colors">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-                      </button>
+                      <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-1 border border-gray-100">
+                        <button onClick={() => removeItem(item.ids[0])} className="w-6 h-6 flex items-center justify-center text-gray-500 hover:text-black hover:bg-gray-200 rounded transition-colors font-medium">-</button>
+                        <span className="text-sm font-medium text-brown min-w-[12px] text-center">{item.quantity}</span>
+                        <button onClick={() => {
+                          const originalItem = ITEMS.find(i => i.name === item.name);
+                          if (originalItem) handleAdd(originalItem);
+                        }} className="w-6 h-6 flex items-center justify-center text-gray-500 hover:text-black hover:bg-gray-200 rounded transition-colors font-medium">+</button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -776,8 +865,9 @@ export default function MenuGrid() {
                   cart={cart}
                   setCart={setCart}
                   setIsCartOpen={setIsCartOpen}
-                  checkoutMode={checkoutMode}
+                  checkoutMode={effectiveMode}
                   setCheckoutMode={setCheckoutMode}
+                  demo={demo}
                 />
               </div>
             </motion.div>
