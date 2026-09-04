@@ -11,6 +11,7 @@ import FlavorsShowcase from "@/components/FlavorsShowcase";
 import VideoStrip from "@/components/VideoStrip";
 import VideoOverlaySection from "@/components/VideoOverlaySection";
 import Footer from "@/components/Footer";
+import AuditDrawer from "@/components/AuditDrawer";
 
 export default function Home() {
   return (
@@ -26,6 +27,8 @@ export default function Home() {
       <VideoStrip />
       <VideoOverlaySection />
       <Footer />
+      <AuditDrawer />
     </main>
   );
 }
+
