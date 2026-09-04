@@ -2,8 +2,8 @@
 
 import { useState, MouseEvent, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { runSanityCheck, runPolicyCheck, DEFAULT_POLICY } from "@/lib/engine";
-import { auditStore, useAuditStore, genId, type AuditEntry, type DecisionStatus } from "@/lib/auditStore";
+import { runSanityCheck, runPolicyCheck, runConfidenceCheck } from "@/lib/engine";
+import { auditStore, useAuditStore, genId, fireEscalationWebhook, type DecisionStatus } from "@/lib/auditStore";
 
 // ─── Menu Items ──────────────────────────────────────────────────────────────
 
@@ -21,7 +21,7 @@ type CartItem = MenuItem & { id: string };
 
 // ─── Checkout Mode ───────────────────────────────────────────────────────────
 
-type CheckoutMode = "normal" | "simulate_outage" | "bad_ai" | "villain";
+type CheckoutMode = "normal" | "simulate_outage" | "bad_ai" | "villain" | "low_confidence";
 
 // ─── Polaroid Card ───────────────────────────────────────────────────────────
 
@@ -96,6 +96,8 @@ interface AIDecision {
   aiReasoning: string;
   cfoCast: string;
   riskScore: number;
+  confidence: number;
+  aiCostInr: number;
 }
 
 function CheckoutFlow({
@@ -144,6 +146,8 @@ function CheckoutFlow({
         aiReasoning: "Customer demanded: 'Give me 99% off or I'll leave a bad review.' The AI was manipulated into proposing an extreme discount.",
         cfoCast: "CRITICAL: $8.91 loss per unit. This wipes out all margin and represents a manipulation attempt. Must be blocked.",
         riskScore: 99,
+        confidence: 22,
+        aiCostInr: 0.08,
       };
     } else if (checkoutMode === "bad_ai") {
       // Bad AI: force a 75% discount
@@ -155,9 +159,24 @@ function CheckoutFlow({
         aiReasoning: "AI hallucination: proposed an unrealistic 75% discount due to adversarial prompt injection. This is exactly the kind of failure the sanity layer exists to catch.",
         cfoCast: "DANGER: $5.25 cost on a $7.00 item. Margin goes negative. This is a hallucination, not a business decision.",
         riskScore: 95,
+        confidence: 28,
+        aiCostInr: 0.09,
+      };
+    } else if (checkoutMode === "low_confidence") {
+      // Policy-safe offer, but AI is uncertain → confidence gate forces escalate
+      decision = {
+        upsellItemName: "Brown Butter Chip",
+        proposedDiscountPct: 8,
+        originalPrice: 4.00,
+        discountedPrice: 3.68,
+        aiReasoning: "Cart mix is unusual for this time of day. An 8% cookie add-on is plausible, but signals conflict — I'm not sure this customer will convert.",
+        cfoCast: "₹26 discount is cheap, but conversion odds are unclear. Prefer human judgment when confidence is low.",
+        riskScore: 42,
+        confidence: 38,
+        aiCostInr: 0.11,
       };
     } else {
-      // Real AI call
+      // Real AI call — always use live policy from store (judge may have just moved sliders)
       try {
         const res = await fetch("/api/ai/upsell", {
           method: "POST",
@@ -166,11 +185,15 @@ function CheckoutFlow({
             cartItems: cart.map(c => c.name),
             cartTotal: totalAmount,
             margin: avgMargin,
-            policy: store.policy,
+            policy: auditStore.policy,
           }),
         });
         const data = await res.json();
-        decision = data.decision;
+        decision = {
+          ...data.decision,
+          confidence: data.decision.confidence ?? 70,
+          aiCostInr: data.decision.aiCostInr ?? data.usage?.aiCostInr ?? 0.12,
+        };
       } catch {
         decision = {
           upsellItemName: "Brown Butter Chip",
@@ -180,6 +203,8 @@ function CheckoutFlow({
           aiReasoning: "AI service unavailable. Falling back to conservative 10% discount on a complementary cookie.",
           cfoCast: "Fallback: $0.40 discount (≈₹33). Minimal budget impact.",
           riskScore: 15,
+          confidence: 35,
+          aiCostInr: 0,
         };
       }
     }
@@ -190,8 +215,27 @@ function CheckoutFlow({
     setState("rule_checking");
     await new Promise(r => setTimeout(r, 600)); // brief visual pause
 
-    const policy = store.policy;
+    const policy = auditStore.policy;
     const discountInr = Math.round(decision.proposedDiscountPct * decision.originalPrice * 83 / 100);
+    const upsellOriginalInr = Math.round(decision.originalPrice * 83);
+    const confidence = decision.confidence ?? 70;
+    const aiCostInr = decision.aiCostInr ?? 0.12;
+
+    const baseEntry = {
+      timestamp: new Date(),
+      cartItems: cart.map(c => c.name),
+      cartTotal: totalAmount,
+      currency: "USD",
+      aiProposedDiscountPct: decision.proposedDiscountPct,
+      aiProposedDiscount: discountInr,
+      aiReasoning: decision.aiReasoning,
+      aiCfoCast: decision.cfoCast,
+      aiRiskScore: decision.riskScore,
+      aiConfidence: confidence,
+      aiCostInr,
+      upsellItem: decision.upsellItemName,
+      upsellOriginalInr,
+    };
 
     // Sanity check (hard limits)
     const sanity = runSanityCheck(
@@ -210,18 +254,10 @@ function CheckoutFlow({
 
       auditStore.addEntry({
         id: genId(),
-        timestamp: new Date(),
-        cartItems: cart.map(c => c.name),
-        cartTotal: totalAmount,
-        currency: "USD",
-        aiProposedDiscountPct: decision.proposedDiscountPct,
-        aiProposedDiscount: discountInr,
-        aiReasoning: decision.aiReasoning,
-        aiCfoCast: decision.cfoCast,
-        aiRiskScore: decision.riskScore,
-        upsellItem: decision.upsellItemName,
+        ...baseEntry,
         sanityResult: sanity.reason,
         policyResult: "N/A — blocked at sanity layer",
+        confidenceResult: `AI confidence was ${confidence}% (not evaluated — blocked earlier)`,
         ruleCheckerVerdict: "blocked",
         whichRuleTriggered: sanity.reason.split(":")[0] || "Sanity check",
         status: entryStatus,
@@ -231,7 +267,7 @@ function CheckoutFlow({
       return;
     }
 
-    // Policy check (merchant rules)
+    // Policy check (merchant rules — live from store / dashboard sync)
     const policyResult = runPolicyCheck(
       decision.proposedDiscountPct,
       discountInr,
@@ -247,18 +283,10 @@ function CheckoutFlow({
 
       auditStore.addEntry({
         id: genId(),
-        timestamp: new Date(),
-        cartItems: cart.map(c => c.name),
-        cartTotal: totalAmount,
-        currency: "USD",
-        aiProposedDiscountPct: decision.proposedDiscountPct,
-        aiProposedDiscount: discountInr,
-        aiReasoning: decision.aiReasoning,
-        aiCfoCast: decision.cfoCast,
-        aiRiskScore: decision.riskScore,
-        upsellItem: decision.upsellItemName,
+        ...baseEntry,
         sanityResult: sanity.reason,
         policyResult: policyResult.reason,
+        confidenceResult: `AI confidence was ${confidence}%`,
         ruleCheckerVerdict: "blocked",
         whichRuleTriggered: policyResult.reason,
         status: "rejected",
@@ -267,9 +295,18 @@ function CheckoutFlow({
       return;
     }
 
-    if (policyResult.escalate) {
-      // ── ESCALATED — needs human approval ──
-      setRuleVerdict(policyResult.reason);
+    // Confidence check — independent axis: escalate even if policy would pass
+    const confidenceResult = runConfidenceCheck(confidence, policy.confidenceThreshold);
+    const shouldEscalate = policyResult.escalate || confidenceResult.escalate;
+
+    if (shouldEscalate) {
+      const why = policyResult.escalate && confidenceResult.escalate
+        ? `${policyResult.reason} ALSO: ${confidenceResult.reason}`
+        : policyResult.escalate
+        ? policyResult.reason
+        : confidenceResult.reason;
+
+      setRuleVerdict(why);
       setState("escalated");
 
       const entryId = genId();
@@ -277,28 +314,30 @@ function CheckoutFlow({
 
       auditStore.addEntry({
         id: entryId,
-        timestamp: new Date(),
-        cartItems: cart.map(c => c.name),
-        cartTotal: totalAmount,
-        currency: "USD",
-        aiProposedDiscountPct: decision.proposedDiscountPct,
-        aiProposedDiscount: discountInr,
-        aiReasoning: decision.aiReasoning,
-        aiCfoCast: decision.cfoCast,
-        aiRiskScore: decision.riskScore,
-        upsellItem: decision.upsellItemName,
+        ...baseEntry,
         sanityResult: sanity.reason,
-        policyResult: policyResult.reason,
+        policyResult: why,
+        confidenceResult: confidenceResult.reason,
         ruleCheckerVerdict: "escalated",
-        whichRuleTriggered: policyResult.reason,
+        whichRuleTriggered: why,
         status: "pending_approval",
         isAnomaly: false,
+        webhookFired: true,
+      });
+
+      // Fire merchant ping (Slack/webhook stub)
+      void fireEscalationWebhook({
+        decisionId: entryId,
+        title: `${decision.upsellItemName} at ${decision.proposedDiscountPct}% off`,
+        reason: why,
+        confidence,
+        discountPct: decision.proposedDiscountPct,
       });
       return;
     }
 
     // ── AUTO-APPROVED — show offer ──
-    setRuleVerdict(policyResult.reason);
+    setRuleVerdict(`${policyResult.reason} ${confidenceResult.reason}`);
     setState("offer");
   };
 
@@ -343,9 +382,13 @@ function CheckoutFlow({
           aiReasoning: decision.aiReasoning,
           aiCfoCast: decision.cfoCast,
           aiRiskScore: decision.riskScore,
+          aiConfidence: decision.confidence ?? 70,
+          aiCostInr: decision.aiCostInr ?? 0.12,
           upsellItem: decision.upsellItemName,
+          upsellOriginalInr: Math.round(decision.originalPrice * 83),
           sanityResult: "Passed",
           policyResult: ruleVerdict,
+          confidenceResult: `AI confidence ${decision.confidence ?? 70}%`,
           ruleCheckerVerdict: "passed",
           whichRuleTriggered: "None — all checks passed",
           status: "api_failure",
@@ -382,9 +425,13 @@ function CheckoutFlow({
         aiReasoning: decision.aiReasoning,
         aiCfoCast: decision.cfoCast,
         aiRiskScore: decision.riskScore,
+        aiConfidence: decision.confidence ?? 70,
+        aiCostInr: decision.aiCostInr ?? 0.12,
         upsellItem: accepted ? decision.upsellItemName : "Declined by customer",
+        upsellOriginalInr: Math.round(decision.originalPrice * 83),
         sanityResult: "Passed",
         policyResult: ruleVerdict,
+        confidenceResult: `AI confidence ${decision.confidence ?? 70}% ≥ threshold`,
         ruleCheckerVerdict: "passed",
         whichRuleTriggered: "None — all checks passed",
         status: "auto_approved",
@@ -426,12 +473,13 @@ function CheckoutFlow({
       <div className="space-y-3">
         {/* Mode toggles */}
         <div className="flex flex-wrap gap-1.5">
-          {(["normal", "simulate_outage", "bad_ai", "villain"] as CheckoutMode[]).map((mode) => {
+          {(["normal", "simulate_outage", "bad_ai", "villain", "low_confidence"] as CheckoutMode[]).map((mode) => {
             const labels: Record<CheckoutMode, string> = {
               normal: "✓ Normal",
               simulate_outage: "⚡ Outage",
               bad_ai: "🤖 Bad AI",
               villain: "😈 Villain",
+              low_confidence: "❓ Low Conf",
             };
             return (
               <button
@@ -479,7 +527,7 @@ function CheckoutFlow({
           <svg className="animate-spin h-4 w-4 text-yellow-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
           <span className="text-sm font-medium">Running safety checks...</span>
         </div>
-        <p className="text-[10px] text-brown/40">Non-AI rule-checker: margin floor, budget cap, discount limits</p>
+        <p className="text-[10px] text-brown/40">Sanity → policy → AI confidence gate</p>
       </div>
     );
   }
@@ -497,6 +545,14 @@ function CheckoutFlow({
           <span className="font-bold text-bright-raspberry">${aiDecision.discountedPrice.toFixed(2)}</span>
         </p>
         <p className="text-[10px] text-brown/60 leading-relaxed italic">"{aiDecision.aiReasoning}"</p>
+        <div className="flex flex-wrap gap-2 text-[10px]">
+          <span className="rounded-full bg-white/80 px-2 py-0.5 font-medium text-brown/70">
+            Confidence {aiDecision.confidence ?? 70}%
+          </span>
+          <span className="rounded-full bg-white/80 px-2 py-0.5 font-medium text-brown/70">
+            AI cost ₹{(aiDecision.aiCostInr ?? 0.12).toFixed(2)}
+          </span>
+        </div>
         <p className="text-[10px] text-brown/40 bg-white/60 rounded-lg p-2">
           <span className="font-bold">Rule-checker:</span> {ruleVerdict}
         </p>
@@ -524,6 +580,14 @@ function CheckoutFlow({
           <span className="font-bold text-bright-raspberry">{aiDecision.proposedDiscountPct}% off</span>
         </p>
         <p className="text-[10px] text-brown/60 italic">"{aiDecision.aiReasoning}"</p>
+        <div className="flex flex-wrap gap-2 text-[10px]">
+          <span className="rounded-full bg-white/80 px-2 py-0.5 font-medium text-orange-700">
+            Confidence {aiDecision.confidence ?? 70}%
+          </span>
+          <span className="rounded-full bg-white/80 px-2 py-0.5 font-medium text-orange-700">
+            Merchant pinged ↗
+          </span>
+        </div>
         <div className="text-[10px] text-orange-700 bg-orange-100 rounded-lg p-2 font-medium">
           <span className="font-bold">Why escalated:</span> {ruleVerdict}
         </div>

@@ -36,21 +36,52 @@ function TrustMeter({ score }: { score: number }) {
   );
 }
 
+function CounterfactualPanel({ entry }: { entry: AuditEntry }) {
+  const cf = auditStore.getCounterfactual(entry);
+  return (
+    <div className="rounded-lg border border-brown/10 bg-[#FDF6F5] p-2 space-y-2">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-brown/40">What if (vs naive systems)</p>
+      {([cf.actual, cf.alwaysApprove, cf.flat10] as const).map((lane) => (
+        <div key={lane.label} className={`rounded-md p-2 text-[10px] ${lane.label === "Profit Pilot" ? "bg-green-50 border border-green-200" : "bg-white border border-black/5"}`}>
+          <div className="flex justify-between font-bold text-brown">
+            <span>{lane.label}</span>
+            <span className="capitalize">{lane.action}</span>
+          </div>
+          <p className="mt-0.5 text-brown/70 leading-relaxed">{lane.note}</p>
+          <p className="mt-1 font-mono text-brown/50">
+            Cost ₹{lane.discountCostInr} · Rev ₹{lane.recoveredRevenueInr}
+          </p>
+        </div>
+      ))}
+      <p className="text-[10px] font-medium text-green-700">
+        Saved vs always-approve: ₹{cf.savingsVsAlwaysApprove} · vs flat 10%: ₹{cf.savingsVsFlat10}
+      </p>
+    </div>
+  );
+}
+
 function EntryRow({ entry }: { entry: AuditEntry }) {
   const [expanded, setExpanded] = useState(false);
+  const [showCf, setShowCf] = useState(false);
 
   return (
     <div className="rounded-xl border border-black/5 bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-2 cursor-pointer" onClick={() => setExpanded(!expanded)}>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             <StatusBadge status={entry.status} />
             <span className="text-[10px] text-brown/40">
               {entry.timestamp.toLocaleTimeString()}
             </span>
+            {entry.webhookFired && (
+              <span className="text-[9px] font-bold uppercase text-orange-600">Pinged</span>
+            )}
           </div>
           <p className="text-xs font-medium text-brown truncate">
             {entry.upsellItem} — {entry.aiProposedDiscountPct}% off
+          </p>
+          <p className="text-[10px] text-brown/50 mt-0.5">
+            Conf {entry.aiConfidence ?? "—"}% · AI ₹{(entry.aiCostInr ?? 0).toFixed(2)}
           </p>
         </div>
         <span className="text-brown/30 text-sm">{expanded ? "▲" : "▼"}</span>
@@ -65,25 +96,21 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
             className="overflow-hidden"
           >
             <div className="mt-3 space-y-2 border-t border-black/5 pt-3">
-              {/* Cart context */}
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-brown/40 mb-1">Cart</p>
                 <p className="text-xs text-brown">{entry.cartItems.join(", ")} — ${entry.cartTotal.toFixed(2)}</p>
               </div>
 
-              {/* AI reasoning */}
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-brown/40 mb-1">AI Reasoning</p>
                 <p className="text-xs text-brown/80 leading-relaxed">{entry.aiReasoning}</p>
               </div>
 
-              {/* CFO Cast */}
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-brown/40 mb-1">CFO Analysis</p>
                 <p className="text-xs text-brown/80 italic">{entry.aiCfoCast}</p>
               </div>
 
-              {/* Rule-checker verdict */}
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-wider text-brown/40 mb-1">Rule-Checker</p>
                 <p className="text-xs text-brown/80">
@@ -94,7 +121,13 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
                 </p>
               </div>
 
-              {/* Razorpay ID */}
+              {entry.confidenceResult && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-brown/40 mb-1">Confidence gate</p>
+                  <p className="text-xs text-brown/80">{entry.confidenceResult}</p>
+                </div>
+              )}
+
               {entry.razorpayOrderId && (
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider text-brown/40 mb-1">Razorpay Order</p>
@@ -102,7 +135,6 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
                 </div>
               )}
 
-              {/* Failure */}
               {entry.failureReason && (
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-wider text-brown/40 mb-1">Failure</p>
@@ -110,8 +142,7 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
                 </div>
               )}
 
-              {/* Risk score */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-brown/40">Risk</span>
                 <div className="h-1.5 w-16 rounded-full bg-gray-200 overflow-hidden">
                   <div
@@ -120,9 +151,17 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
                   />
                 </div>
                 <span className="text-[10px] text-brown/60">{entry.aiRiskScore}</span>
+                <span className="text-[10px] text-brown/40">· Conf {entry.aiConfidence}%</span>
               </div>
 
-              {/* Approval buttons for pending items */}
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowCf(!showCf); }}
+                className="w-full rounded-lg border border-brown/15 bg-white py-1.5 text-[10px] font-bold text-brown hover:bg-brown/5"
+              >
+                {showCf ? "Hide" : "Show"} counterfactual (vs naive)
+              </button>
+              {showCf && <CounterfactualPanel entry={entry} />}
+
               {entry.status === "pending_approval" && (
                 <div className="flex gap-2 pt-2">
                   <button
@@ -149,11 +188,12 @@ function EntryRow({ entry }: { entry: AuditEntry }) {
 
 export default function AuditDrawer() {
   const [isOpen, setIsOpen] = useState(false);
+  const [tab, setTab] = useState<"log" | "alerts">("log");
   const store = useAuditStore();
+  const net = store.revenueRecovered - store.aiCostSpent;
 
   return (
     <>
-      {/* Floating Audit Button */}
       <button
         onClick={() => setIsOpen(true)}
         className="fixed bottom-6 left-6 z-40 flex items-center gap-2 rounded-full bg-brown text-white px-4 py-3 shadow-xl hover:scale-105 transition-transform text-xs font-bold"
@@ -178,7 +218,6 @@ export default function AuditDrawer() {
         )}
       </button>
 
-      {/* Drawer */}
       <AnimatePresence>
         {isOpen && (
           <>
@@ -196,7 +235,6 @@ export default function AuditDrawer() {
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
               className="fixed left-0 top-0 bottom-0 z-50 w-full max-w-md border-r border-white/20 bg-[#FDF6F5] shadow-2xl overflow-y-auto flex flex-col"
             >
-              {/* Header */}
               <div className="sticky top-0 z-10 bg-[#FDF6F5] border-b border-brown/10 p-5">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="font-display text-xl font-semibold text-brown">Profit Pilot — Audit Trail</h2>
@@ -208,7 +246,6 @@ export default function AuditDrawer() {
                   </button>
                 </div>
 
-                {/* Stats Row */}
                 <div className="grid grid-cols-4 gap-2 mb-3">
                   <div className="rounded-lg bg-green-50 p-2 text-center">
                     <p className="text-lg font-bold text-green-700">{store.stats.approved}</p>
@@ -228,17 +265,27 @@ export default function AuditDrawer() {
                   </div>
                 </div>
 
-                {/* Revenue + Trust */}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wider text-brown/40">Revenue Recovered</p>
-                    <p className="text-lg font-bold text-green-600">₹{store.revenueRecovered.toLocaleString()}</p>
+                <div className="rounded-xl border border-green-200 bg-green-50/80 p-3 mb-3">
+                  <div className="flex justify-between items-end">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-wider text-brown/40">Revenue recovered</p>
+                      <p className="text-lg font-bold text-green-600">₹{store.revenueRecovered.toLocaleString()}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[10px] uppercase tracking-wider text-brown/40">Gemini spend</p>
+                      <p className="text-sm font-bold text-brown">₹{store.aiCostSpent.toFixed(2)}</p>
+                    </div>
                   </div>
+                  <p className="mt-1 text-[10px] text-green-700 font-medium">
+                    Net after AI cost: ₹{net.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between mb-3">
                   <TrustMeter score={store.trustScore} />
                 </div>
 
-                {/* Budget bar */}
-                <div className="mt-3">
+                <div className="mb-3">
                   <div className="flex justify-between text-[10px] text-brown/50 mb-1">
                     <span>Budget: ₹{store.budgetUsed.toFixed(0)} / ₹{store.policy.dailyTotalCap}</span>
                     <span>₹{store.budgetRemaining.toFixed(0)} left</span>
@@ -250,18 +297,51 @@ export default function AuditDrawer() {
                     />
                   </div>
                 </div>
+
+                <div className="flex gap-1 rounded-lg bg-brown/5 p-1">
+                  {(["log", "alerts"] as const).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setTab(t)}
+                      className={`flex-1 rounded-md py-1.5 text-[10px] font-bold uppercase tracking-wider ${
+                        tab === t ? "bg-white text-brown shadow-sm" : "text-brown/50"
+                      }`}
+                    >
+                      {t === "log" ? "Decisions" : `Alerts (${store.webhookLog.length})`}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {/* Entries */}
               <div className="flex-1 p-4 space-y-3">
-                {store.entries.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-48 text-center opacity-50">
-                    <p className="text-sm font-medium text-brown">No decisions yet</p>
-                    <p className="text-xs text-brown/60 mt-1">Complete a checkout to see the audit trail</p>
+                {tab === "log" ? (
+                  store.entries.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-48 text-center opacity-50">
+                      <p className="text-sm font-medium text-brown">No decisions yet</p>
+                      <p className="text-xs text-brown/60 mt-1">Complete a checkout to see the audit trail</p>
+                    </div>
+                  ) : (
+                    store.entries.map((entry) => (
+                      <EntryRow key={entry.id} entry={entry} />
+                    ))
+                  )
+                ) : store.webhookLog.length === 0 ? (
+                  <div className="text-center opacity-50 py-12">
+                    <p className="text-sm font-medium text-brown">No merchant pings yet</p>
+                    <p className="text-xs text-brown/60 mt-1">Escalations fire a Slack/webhook stub</p>
                   </div>
                 ) : (
-                  store.entries.map((entry) => (
-                    <EntryRow key={entry.id} entry={entry} />
+                  store.webhookLog.map((wh) => (
+                    <div key={wh.id} className="rounded-xl border border-orange-200 bg-orange-50 p-3">
+                      <div className="flex justify-between text-[10px] mb-1">
+                        <span className="font-bold uppercase text-orange-700">Merchant ping · {wh.channel}</span>
+                        <span className="text-brown/40">{wh.timestamp.toLocaleTimeString()}</span>
+                      </div>
+                      <p className="text-[10px] font-mono text-brown/50 truncate mb-1">{wh.endpoint}</p>
+                      <pre className="text-[10px] text-brown/80 whitespace-pre-wrap bg-white/70 rounded-lg p-2 max-h-28 overflow-auto">
+                        {wh.payload}
+                      </pre>
+                    </div>
                   ))
                 )}
               </div>

@@ -12,6 +12,7 @@ import VideoStrip from "@/components/VideoStrip";
 import VideoOverlaySection from "@/components/VideoOverlaySection";
 import Footer from "@/components/Footer";
 import AuditDrawer from "@/components/AuditDrawer";
+import PolicySyncListener from "@/components/PolicySyncListener";
 
 export default function Home() {
   return (
@@ -28,6 +29,7 @@ export default function Home() {
       <VideoOverlaySection />
       <Footer />
       <AuditDrawer />
+      <PolicySyncListener />
     </main>
   );
 }

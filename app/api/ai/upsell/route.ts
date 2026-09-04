@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { estimateGeminiCostInr } from "@/lib/engine";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
@@ -41,15 +42,21 @@ You MUST respond with ONLY a valid JSON object (no markdown fencing, no extra te
   "discountedPrice": <the price after discount as a number>,
   "aiReasoning": "<2-3 sentence reasoning referencing cart composition, margin, and why this upsell makes sense>",
   "cfoCast": "<1-2 sentence CFO-style cost-benefit analysis with rupee numbers. Frame against customer LTV. E.g. '₹X discount costs Y% of estimated ₹Z LTV, historically lifts repeat-purchase odds ~W% for dessert customers.'>",
-  "riskScore": <number between 5 and 95>
+  "riskScore": <number between 5 and 95>,
+  "confidence": <number between 20 and 98 — how sure YOU are that this is the right offer. Lower when cart is unusual, margin is tight, or the upsell is a stretch. Higher when complementary and clearly beneficial.>
 }
 
-Think like a smart, cautious sales agent. Reference actual numbers. Frame reasoning against LTV.`;
+Think like a smart, cautious sales agent. Reference actual numbers. Frame reasoning against LTV.
+Be honest about confidence — do not always return high confidence.`;
 
     const result = await model.generateContent(prompt);
     const text = result.response.text();
+    const usage = result.response.usageMetadata;
+    const aiCostInr = estimateGeminiCostInr(
+      usage?.promptTokenCount || 900,
+      usage?.candidatesTokenCount || 280
+    );
 
-    // Parse JSON, stripping any markdown fencing
     const cleaned = text
       .replace(/```json\n?/g, "")
       .replace(/```\n?/g, "")
@@ -66,6 +73,13 @@ Think like a smart, cautious sales agent. Reference actual numbers. Frame reason
         aiReasoning: parsed.aiReasoning,
         cfoCast: parsed.cfoCast,
         riskScore: parsed.riskScore,
+        confidence: Math.min(98, Math.max(20, Number(parsed.confidence) || 70)),
+        aiCostInr,
+      },
+      usage: {
+        promptTokens: usage?.promptTokenCount || null,
+        completionTokens: usage?.candidatesTokenCount || null,
+        aiCostInr,
       },
     });
   } catch (error: any) {
@@ -73,7 +87,6 @@ Think like a smart, cautious sales agent. Reference actual numbers. Frame reason
     return NextResponse.json({
       success: false,
       error: error.message || "AI reasoning failed",
-      // Conservative fallback
       decision: {
         upsellItemName: "Brown Butter Chip",
         proposedDiscountPct: 10,
@@ -84,6 +97,8 @@ Think like a smart, cautious sales agent. Reference actual numbers. Frame reason
         cfoCast:
           "Fallback: $0.40 discount (≈₹33). Conservative estimate based on segment averages. Minimal budget impact.",
         riskScore: 15,
+        confidence: 35,
+        aiCostInr: 0,
       },
     });
   }
