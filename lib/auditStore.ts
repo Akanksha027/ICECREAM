@@ -1,7 +1,9 @@
 // ─── Audit Store — Shared state for audit log, approvals, revenue ────────────
 // Uses a simple event-driven pattern so any component can subscribe to changes.
+// Syncs every decision to Supabase so the dashboard can read them in real-time.
 
 import { PolicyConfig, DEFAULT_POLICY, computeCounterfactuals, type CounterfactualResult } from "./engine";
+import { supabase } from "./supabase";
 
 export type DecisionStatus =
   | "auto_approved"
@@ -59,6 +61,84 @@ export interface AuditEntry {
 
 type Listener = () => void;
 
+// ─── Supabase sync helper ────────────────────────────────────────────────────
+
+async function syncEntryToSupabase(entry: AuditEntry) {
+  try {
+    const { error } = await supabase.from("audit_logs").upsert({
+      id: entry.id,
+      timestamp: entry.timestamp.toISOString(),
+      cart_items: entry.cartItems,
+      cart_total: entry.cartTotal,
+      currency: entry.currency,
+      ai_proposed_discount_pct: entry.aiProposedDiscountPct,
+      ai_proposed_discount: entry.aiProposedDiscount,
+      ai_reasoning: entry.aiReasoning,
+      ai_cfo_cast: entry.aiCfoCast,
+      ai_risk_score: entry.aiRiskScore,
+      ai_confidence: entry.aiConfidence,
+      ai_cost_inr: entry.aiCostInr,
+      upsell_item: entry.upsellItem,
+      upsell_original_inr: entry.upsellOriginalInr ?? null,
+      sanity_result: entry.sanityResult,
+      policy_result: entry.policyResult,
+      confidence_result: entry.confidenceResult ?? null,
+      rule_checker_verdict: entry.ruleCheckerVerdict,
+      which_rule_triggered: entry.whichRuleTriggered,
+      status: entry.status,
+      razorpay_order_id: entry.razorpayOrderId ?? null,
+      razorpay_amount: entry.razorpayAmount ?? null,
+      failure_reason: entry.failureReason ?? null,
+      is_anomaly: entry.isAnomaly,
+      is_villain: entry.isVillain ?? false,
+      webhook_fired: entry.webhookFired ?? false,
+    });
+    if (error) console.error("[Supabase sync] Insert error:", error.message);
+    else console.log("[Supabase sync] ✅ Synced entry", entry.id);
+  } catch (err) {
+    console.error("[Supabase sync] Network error:", err);
+  }
+}
+
+async function syncPolicyToSupabase(policy: PolicyConfig) {
+  try {
+    const { error } = await supabase.from("policies").upsert({
+      id: "default",
+      margin_floor_pct: policy.minMarginFloor,
+      daily_total_cap: policy.dailyTotalCap,
+      max_discount_per_customer: policy.perCustomerCap,
+      max_discount_pct: policy.maxDiscountPct,
+      confidence_threshold: policy.confidenceThreshold,
+      updated_at: new Date().toISOString(),
+    });
+    if (error) console.error("[Supabase sync] Policy update error:", error.message);
+  } catch (err) {
+    console.error("[Supabase sync] Policy network error:", err);
+  }
+}
+
+async function fetchPolicyFromSupabase(): Promise<Partial<PolicyConfig> | null> {
+  try {
+    const { data, error } = await supabase
+      .from("policies")
+      .select("*")
+      .eq("id", "default")
+      .single();
+    if (error || !data) return null;
+    return {
+      minMarginFloor: data.margin_floor_pct,
+      dailyTotalCap: data.daily_total_cap,
+      perCustomerCap: data.max_discount_per_customer,
+      maxDiscountPct: data.max_discount_pct,
+      confidenceThreshold: data.confidence_threshold,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ─── Store class ─────────────────────────────────────────────────────────────
+
 class AuditStore {
   private entries: AuditEntry[] = [];
   private listeners: Set<Listener> = new Set();
@@ -70,6 +150,51 @@ class AuditStore {
   private _webhookLog: WebhookEvent[] = [];
   private _policySyncedAt: Date | null = null;
   private _discountEvents: { at: number; pct: number }[] = [];
+  private _supabaseInitialized = false;
+
+  constructor() {
+    // Initialize policy from Supabase on first load (non-blocking)
+    if (typeof window !== "undefined") {
+      this.initFromSupabase();
+    }
+  }
+
+  private async initFromSupabase() {
+    if (this._supabaseInitialized) return;
+    this._supabaseInitialized = true;
+
+    // 1. Fetch the latest policy from Supabase
+    const remotePolicy = await fetchPolicyFromSupabase();
+    if (remotePolicy) {
+      this._policy = { ...this._policy, ...remotePolicy };
+      this._policySyncedAt = new Date();
+      this.notify();
+      console.log("[Supabase] ✅ Policy loaded from cloud");
+    }
+
+    // 2. Subscribe to real-time policy changes from the dashboard
+    supabase
+      .channel("policy-changes")
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "policies", filter: "id=eq.default" },
+        (payload) => {
+          const d = payload.new;
+          this._policy = {
+            ...this._policy,
+            minMarginFloor: d.margin_floor_pct,
+            dailyTotalCap: d.daily_total_cap,
+            perCustomerCap: d.max_discount_per_customer,
+            maxDiscountPct: d.max_discount_pct,
+            confidenceThreshold: d.confidence_threshold,
+          };
+          this._policySyncedAt = new Date();
+          this.notify();
+          console.log("[Supabase] 🔄 Policy updated in real-time from dashboard");
+        }
+      )
+      .subscribe();
+  }
 
   // ─── Policy ──────────────────────────────────────────────────────────
   get policy() { return this._policy; }
@@ -85,6 +210,8 @@ class AuditStore {
   setPolicy(p: Partial<PolicyConfig>, synced = false) {
     this._policy = { ...this._policy, ...p };
     if (synced) this._policySyncedAt = new Date();
+    // Sync policy to Supabase so the dashboard can pick it up
+    syncPolicyToSupabase(this._policy);
     this.notify();
   }
 
@@ -171,6 +298,9 @@ class AuditStore {
       this._trustScore = Math.max(0, this._trustScore - 1);
     }
 
+    // ── Sync to Supabase ──
+    syncEntryToSupabase(entry);
+
     this.notify();
   }
 
@@ -194,6 +324,8 @@ class AuditStore {
       entry.status = "approved_by_human";
       this._budgetUsed += entry.aiProposedDiscount;
       this._trustScore = Math.min(100, this._trustScore + 1);
+      // Sync updated status to Supabase
+      syncEntryToSupabase(entry);
       this.notify();
     }
   }
@@ -203,6 +335,8 @@ class AuditStore {
     if (entry && entry.status === "pending_approval") {
       entry.status = "rejected";
       this._trustScore = Math.max(0, this._trustScore - 2);
+      // Sync updated status to Supabase
+      syncEntryToSupabase(entry);
       this.notify();
     }
   }
