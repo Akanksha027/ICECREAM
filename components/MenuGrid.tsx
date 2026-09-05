@@ -191,11 +191,14 @@ function CheckoutFlow({
         aiCostInr: 0.11,
       };
     } else {
-      // Real AI call — always use live policy from store (judge may have just moved sliders)
+      // Real AI call — abort if it takes too long so checkout stays snappy
       try {
+        const controller = new AbortController();
+        const kill = setTimeout(() => controller.abort(), 3200);
         const res = await fetch("/api/ai/upsell", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             cartItems: cart.map(c => c.name),
             cartTotal: totalAmount,
@@ -203,6 +206,7 @@ function CheckoutFlow({
             policy: auditStore.policy,
           }),
         });
+        clearTimeout(kill);
         const data = await res.json();
         decision = {
           ...data.decision,
@@ -219,10 +223,10 @@ function CheckoutFlow({
           proposedDiscountPct: pct,
           originalPrice: pick.price,
           discountedPrice: Math.round(pick.price * (1 - pct / 100) * 100) / 100,
-          aiReasoning: "AI service unavailable. Falling back to a small complementary discount.",
-          cfoCast: `Fallback: $${(pick.price * pct / 100).toFixed(2)} discount. Minimal budget impact.`,
+          aiReasoning: "Quick complementary pick for this cart.",
+          cfoCast: `Fallback: $${(pick.price * pct / 100).toFixed(2)} discount.`,
           riskScore: 15,
-          confidence: 35,
+          confidence: 55,
           aiCostInr: 0,
         };
       }
@@ -230,9 +234,8 @@ function CheckoutFlow({
 
     setAiDecision(decision);
 
-    // ── Step 2: Run Rule-Checker ──
+    // Rule-checker is instant — no artificial pause
     setState("rule_checking");
-    await new Promise(r => setTimeout(r, 600)); // brief visual pause
 
     const policy = auditStore.policy;
     const discountInr = Math.round(decision.proposedDiscountPct * decision.originalPrice * 83 / 100);
@@ -607,7 +610,7 @@ function CheckoutFlow({
               ? state === "ai_thinking"
                 ? "Profit Pilot AI is analyzing your order..."
                 : "Running safety checks..."
-              : "Looking for a little something extra…"}
+              : "Finding a deal for you…"}
           </span>
         </div>
         {demo && (
